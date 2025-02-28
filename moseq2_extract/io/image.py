@@ -6,7 +6,7 @@ import os
 import ast
 import json
 import numpy as np
-from skimage.external import tifffile
+import tifffile
 from os.path import join, dirname, exists
 
 
@@ -96,22 +96,24 @@ def read_image(filename, scale=True, scale_key="scale_factor"):
 
     with tifffile.TiffFile(filename) as tif:
         tmp = tif
+        image = tif.asarray()
 
-    image = tmp.asarray()
+        if scale:
+            try:
+                image_desc = json.loads(tmp.pages[0].tags["image_description"].as_str()[2:-1])
+            except KeyError:
+                image_desc = json.loads(tmp.pages[0].tags["ImageDescription"].value)
 
-    if scale:
-        image_desc = json.loads(tmp.pages[0].tags["image_description"].as_str()[2:-1])
+            try:
+                scale_factor = int(image_desc[scale_key])
+            except ValueError:
+                scale_factor = ast.literal_eval(image_desc[scale_key])
 
-        try:
-            scale_factor = int(image_desc[scale_key])
-        except ValueError:
-            scale_factor = ast.literal_eval(image_desc[scale_key])
-
-        if type(scale_factor) is int:
-            image = image / scale_factor
-        elif type(scale_factor) is tuple:
-            iinfo = np.iinfo(image.dtype)
-            image = image.astype("float32") / iinfo.max
-            image = image * (scale_factor[1] - scale_factor[0]) + scale_factor[0]
+            if type(scale_factor) is int:
+                image = image / scale_factor
+            elif type(scale_factor) is tuple:
+                iinfo = np.iinfo(image.dtype)
+                image = image.astype("float32") / iinfo.max
+                image = image * (scale_factor[1] - scale_factor[0]) + scale_factor[0]
 
     return image

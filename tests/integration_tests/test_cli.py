@@ -4,7 +4,8 @@ import glob
 import click
 import shutil
 import numpy as np
-import ruamel.yaml as yaml
+from ruamel.yaml import YAML
+yaml = YAML(typ='safe', pure=True)
 from os.path import exists
 import numpy.testing as npt
 from unittest import TestCase
@@ -115,7 +116,7 @@ class CLITests(TestCase):
         config_data["flip_classifier"] = None
 
         with open(config_file, "w+") as f:
-            yaml.safe_dump(config_data, f)
+            yaml.dump(config_data, f)
 
         write_fake_movie(data_path)
         assert os.path.isfile(data_path), "fake movie was not written"

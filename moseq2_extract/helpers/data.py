@@ -8,7 +8,8 @@ import shutil
 import tarfile
 import warnings
 import numpy as np
-import ruamel.yaml as yaml
+from ruamel.yaml import YAML
+yaml = YAML(typ='safe', pure=True)
 from tqdm.auto import tqdm
 from cytoolz import keymap
 from pkg_resources import get_distribution
@@ -255,7 +256,7 @@ def copy_manifest_results(manifest, output_dir):
 
         v["yaml_dict"].pop("extraction_metadata", None)
         with open(f'{join(output_dir, v["copy_path"])}.yaml', "w") as f:
-            yaml.safe_dump(v["yaml_dict"], f)
+            yaml.dump(v["yaml_dict"], f)
 
 
 def handle_extract_metadata(input_file, dirname):

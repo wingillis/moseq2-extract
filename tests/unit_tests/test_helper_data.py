@@ -2,7 +2,8 @@ import os
 import sys
 import shutil
 import tarfile
-import ruamel.yaml as yaml
+from ruamel.yaml import YAML
+yaml = YAML(typ='safe', pure=True)
 from unittest import TestCase
 from moseq2_extract.util import load_metadata
 from ..integration_tests.test_cli import write_fake_movie

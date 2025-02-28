@@ -4,7 +4,8 @@ import h5py
 import json
 import shutil
 import numpy as np
-import ruamel.yaml as yaml
+from ruamel.yaml import YAML
+yaml = YAML(typ='safe', pure=True)
 import numpy.testing as npt
 from unittest import TestCase
 from os.path import exists, dirname

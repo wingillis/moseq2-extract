@@ -5,7 +5,8 @@ import uuid
 import shutil
 import numpy as np
 from copy import deepcopy
-import ruamel.yaml as yaml
+from ruamel.yaml import YAML
+yaml = YAML(typ='safe', pure=True)
 from unittest import TestCase
 from moseq2_extract.io.image import read_image
 from moseq2_extract.helpers.data import create_extract_h5

@@ -12,7 +12,8 @@ from glob import glob
 import numpy as np
 import urllib.request
 from copy import deepcopy
-import ruamel.yaml as yaml
+from ruamel.yaml import YAML
+yaml = YAML(typ='safe', pure=True)
 from tqdm.auto import tqdm
 from cytoolz import partial
 from moseq2_extract.io.image import write_image
@@ -75,7 +76,7 @@ def copy_h5_metadata_to_yaml_wrapper(input_dir, h5_metadata_path):
 
         new_file = f"{basename(tup[1])}_update.yaml"
         with open(new_file, "w+") as f:
-            yaml.safe_dump(tup[0], f)
+            yaml.dump(tup[0], f)
 
         if new_file != tup[1]:
             shutil.move(new_file, tup[1])
@@ -121,7 +122,7 @@ def generate_index_wrapper(input_dir, output_file):
 
     # write out index yaml
     with open(output_file, "w") as f:
-        yaml.safe_dump(output_dict, f)
+        yaml.dump(output_dict, f)
 
     return output_file
 
@@ -217,7 +218,7 @@ def generate_index_from_agg_res_wrapper(input_dir):
 
     # write out index yaml
     with open(output_file, "w") as f:
-        yaml.safe_dump(index_data, f)
+        yaml.dump(index_data, f)
 
 
 def get_roi_wrapper(input_file, config_data, output_dir=None):
@@ -437,7 +438,7 @@ def extract_wrapper(input_file, output_dir, config_data, num_frames=None, skip=F
         return
 
     with open(status_filename, "w") as f:
-        yaml.safe_dump(status_dict, f)
+        yaml.dump(status_dict, f)
 
     # Get Structuring Elements for extraction
     str_els = get_strels(config_data)
@@ -515,10 +516,10 @@ def extract_wrapper(input_file, output_dir, config_data, num_frames=None, skip=F
 
     status_dict["complete"] = True
     if status_dict["parameters"].get("true_depth") is None:
-        # config_data.get('true_depth') is numpy.float64 and yaml.safe_dump can't represent the object
+        # config_data.get('true_depth') is numpy.float64 and yaml.dump can't represent the object
         status_dict["parameters"]["true_depth"] = float(config_data.get("true_depth"))
     with open(status_filename, "w") as f:
-        yaml.safe_dump(status_dict, f)
+        yaml.dump(status_dict, f)
 
     return output_dir
 
@@ -576,7 +577,7 @@ def flip_file_wrapper(config_file, output_dir, selected_flip=None):
         config_data["flip_classifier"] = output_filename
 
         with open(config_file, "w") as f:
-            yaml.safe_dump(config_data, f)
+            yaml.dump(config_data, f)
     except Exception as e:
         print("Could not update configuration file flip classifier path")
         print("Unexpected error:", e)

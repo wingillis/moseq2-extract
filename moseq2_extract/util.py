@@ -13,7 +13,8 @@ import warnings
 import numpy as np
 from glob import glob
 from copy import deepcopy
-import ruamel.yaml as yaml
+from ruamel.yaml import YAML
+yaml = YAML(typ='safe', pure=True)
 from typing import Pattern
 from cytoolz import valmap
 from moseq2_extract.io.image import write_image
@@ -101,7 +102,7 @@ def command_with_config(config_file_param_name):
                 # combine original config data and the combined params prioritizing the combined
                 config_data = {**config_data, **combined}
                 # with open(config_file, 'w') as f:
-                #     yaml.safe_dump(config_data, f)
+                #     yaml.dump(config_data, f)
 
             return super().invoke(ctx)
 
@@ -762,7 +763,7 @@ def read_yaml(yaml_file):
     """
 
     with open(yaml_file, 'r') as f:
-        return yaml.safe_load(f)
+        return yaml.load(f)
 
 def mouse_threshold_filter(h5file, thresh=0):
     """

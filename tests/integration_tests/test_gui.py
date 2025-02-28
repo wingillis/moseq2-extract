@@ -3,7 +3,8 @@ import sys
 import h5py
 import shutil
 from copy import deepcopy
-import ruamel.yaml as yaml
+from ruamel.yaml import YAML
+yaml = YAML(typ='safe', pure=True)
 from os.path import exists
 from unittest import TestCase
 from .test_cli import write_fake_movie
@@ -194,7 +195,7 @@ class GUITests(TestCase):
         config_data["bg_sort_roi_by_position"] = True
 
         with open(configfile, "w") as f:
-            yaml.safe_dump(config_data, f)
+            yaml.dump(config_data, f)
 
         stdin = "data/stdin.txt"
         with open(stdin, "w") as f:
@@ -223,12 +224,12 @@ class GUITests(TestCase):
         config_data["session_config_path"] = "data/session_config.yaml"
 
         with open(configfile, "w") as f:
-            yaml.safe_dump(config_data, f)
+            yaml.dump(config_data, f)
 
         session_config = {"azure_test": deepcopy(config_data)}
 
         with open(config_data["session_config_path"], "w") as f:
-            yaml.safe_dump(session_config, f)
+            yaml.dump(session_config, f)
 
         mkv_path = "data/azure_test/nfov_test.mkv"
         ret = extract_command(mkv_path, None, configfile, skip=False, num_frames=60)
