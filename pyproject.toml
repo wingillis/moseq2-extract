@@ -1,0 +1,54 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel", "setuptools_scm[toml]>=6.2"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "moseq2-extract"
+authors = [
+    {name = "Datta Lab"}
+]
+description = "To boldly go where no mouse has gone before"
+dynamic = ["version"]
+readme = "README.md"
+requires-python = ">=3.6,<3.8"
+dependencies = [
+    "h5py",
+    "tqdm>=4.48.0",
+    "scipy",
+    "numpy",
+    "click==7.0",
+    "joblib",
+    "cytoolz",
+    "matplotlib",
+    "statsmodels",
+    "scikit-image",
+    "scikit-learn",
+    "opencv-python",
+    "ruamel.yaml",
+    "tifffile",
+]
+
+[project.optional-dependencies]
+docs = [
+    "sphinx",
+    "sphinx-click", 
+    "sphinx-rtd-theme"
+]
+
+[project.scripts]
+moseq2-extract = "moseq2_extract.cli:cli"
+
+[tool.setuptools_scm]
+write_to = "moseq2_extract/_version.py"
+
+[tool.setuptools.dynamic]
+version = {attr = "moseq2_extract.__version__"}
+
+# Optional development tools configuration
+[tool.black]
+line-length = 88
+target-version = ['py37']
+
+[tool.isort]
+profile = "black"
+multi_line_output = 3
