@@ -26,6 +26,7 @@ dependencies = [
     "opencv-python-headless>=4.11.0.86",
     "ruamel-yaml>=0.18.10",
     "tifffile>=2025.3.30",
+    "toml>=0.10.2",
 ]
 
 [project.optional-dependencies]
@@ -48,7 +49,8 @@ profile = "black"
 multi_line_output = 3
 
 [tool.setuptools.packages.find]
-where = ["moseq2_extract"]
+where = ["."]
+include = ["moseq2_extract*"]
 
 [tool.setuptools.dynamic]
 version = {attr = "moseq2_extract.__version__"}

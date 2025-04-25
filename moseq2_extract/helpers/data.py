@@ -8,11 +8,11 @@ import shutil
 import tarfile
 import warnings
 import numpy as np
+import moseq2_extract
 from ruamel.yaml import YAML
 yaml = YAML(typ='safe', pure=True)
 from tqdm.auto import tqdm
 from cytoolz import keymap
-from pkg_resources import get_distribution
 from moseq2_extract.io.video import load_timestamps_from_movie
 from os.path import exists, join, dirname, basename, splitext
 from moseq2_extract.util import (
@@ -464,7 +464,7 @@ def create_extract_h5(
     ] = "Computed background image"
 
     # Extract Version
-    extract_version = np.string_(get_distribution("moseq2-extract").version)
+    extract_version = moseq2_extract.__version__
     h5_file.create_dataset("metadata/extraction/extract_version", data=extract_version)
     h5_file["metadata/extraction/extract_version"].attrs[
         "description"

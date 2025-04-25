@@ -3,13 +3,9 @@ CLI for extracting the depth data.
 """
 
 import os
+import toml
 import click
-from ruamel.yaml import YAML
-from moseq2_extract.util import (
-    command_with_config,
-    read_yaml,
-    recursive_find_unextracted_dirs,
-)
+from moseq2_extract.util import recursive_find_unextracted_dirs
 from moseq2_extract.helpers.wrappers import (
     get_roi_wrapper,
     extract_wrapper,
@@ -21,35 +17,58 @@ from moseq2_extract.helpers.wrappers import (
     copy_slice_wrapper,
 )
 from moseq2_extract.helpers.extract import run_slurm_extract, run_local_extract
-
-orig_init = click.core.Option.__init__
-
-
-def new_init(self, *args, **kwargs):
-    orig_init(self, *args, **kwargs)
-    self.show_default = True
+from pathlib import Path
 
 
-click.core.Option.__init__ = new_init
+def load_config(ctx, param, value):
+    """Callback to load configuration from a TOML file and set defaults."""
+    if not value or not os.path.exists(value):
+        return None  # No config file specified or found
+
+    try:
+        with open(value, "r") as f:
+            config = toml.load(f)
+        # Extract the [extract] section if it exists
+        extract_config = config.get("extract", {})
+        if not isinstance(extract_config, dict):
+            raise click.BadParameter("Config [extract] section must be a dictionary.")
+
+        # Set the default map for the context if it doesn't exist
+        ctx.default_map = ctx.default_map or {}
+        # Update the default map with values from the config file
+        # add default map to each subcommand
+        _maps = {}
+        for command in ctx.command.commands.values():
+            _maps[command.name] = extract_config
+        ctx.default_map.update(_maps)
+
+        ctx.ensure_object(dict).update({"config_path": value})
+
+    except Exception as e:
+        raise click.BadParameter(f"Error parsing config file {value}: {e}")
+
+    return value  # Return the path itself
 
 
-@click.group()
+@click.group(context_settings=dict(show_default=True, default_map={}))
 @click.version_option()
-def cli():
+@click.option(
+    "--config-file",
+    type=click.Path(dir_okay=False),
+    help="Path to a TOML configuration file. Options defined here are overridden by CLI arguments.",
+    callback=load_config,
+    is_eager=True,
+)
+def cli(config_file):
+    """MoSeq2 Extract: Extract mouse behavior from depth videos."""
     pass
 
 
 def common_roi_options(function):
     """
     Decorator function for grouping shared ROI related parameters.
-
-    Args:
-    function: Function to add enclosed parameters to as click options.
-
-    Returns:
-    function: Updated function including shared parameters.
+    Defaults are set to None, allowing config file or ultimate defaults to apply.
     """
-
     function = click.option(
         "--bg-roi-dilate",
         default=(10, 10),
@@ -78,8 +97,7 @@ def common_roi_options(function):
         "--camera-type",
         default="auto",
         type=click.Choice(["auto", "kinect", "azure", "realsense"]),
-        help='Camera type used for recording for auto-sets bg-roi-weights to precomputed values for different camera types. \
-                             Possible types: ["kinect", "azure", "realsense"]',
+        help="Camera type used for recording for auto-sets bg-roi-weights to precomputed values for different camera types.",
     )(function)
     function = click.option(
         "--manual-set-depth-range",
@@ -96,7 +114,7 @@ def common_roi_options(function):
         "--bg-roi-gradient-filter",
         default=False,
         type=bool,
-        help="Use graident filter to exclude walls for detected ROI",
+        help="Use gradient filter to exclude walls for detected ROI",
     )(function)
     function = click.option(
         "--bg-roi-gradient-threshold",
@@ -138,7 +156,7 @@ def common_roi_options(function):
         help="Size of cv2 Structure Element to erode roi.",
     )(function)
     function = click.option(
-        '--bg-v2',
+        "--bg-v2",
         is_flag=True,
         help="Flag to adaptively use best quantile for computing background",
     )(function)
@@ -169,7 +187,6 @@ def common_roi_options(function):
         default=False,
         help="Overwrite previously computed background image",
     )(function)
-    function = click.option("--config-file", type=click.Path())(function)
     function = click.option(
         "--progress-bar", "-p", is_flag=True, help="Show verbose progress bars."
     )(function)
@@ -179,14 +196,8 @@ def common_roi_options(function):
 def common_avi_options(function):
     """
     Decorator function for grouping shared video processing parameters.
-
-    Args:
-    function: Function to add enclosed parameters to as click options.
-
-    Returns:
-    function: Updated function including shared parameters.
+    Defaults are set to None, allowing config file or ultimate defaults to apply.
     """
-
     function = click.option(
         "-o",
         "--output-file",
@@ -199,10 +210,14 @@ def common_avi_options(function):
     )(function)
     function = click.option("--fps", type=float, default=30, help="Video FPS")(function)
     function = click.option(
-        "--delete", is_flag=True, help="Delete raw file if encoding is sucessful"
+        "--delete", is_flag=True, help="Delete raw file if encoding is successful"
     )(function)
     function = click.option(
-        "-t", "--threads", type=int, default=8, help="Number of threads for encoding"
+        "-t",
+        "--threads",
+        type=int,
+        default=8,
+        help="Number of threads used saving ffv1 endcoded AVI file with ffmpeg",
     )(function)
     function = click.option(
         "-m",
@@ -217,15 +232,9 @@ def common_avi_options(function):
 
 def extract_options(function):
     """
-    Decorator function for grouping shared extraction prameters.
-
-    Args:
-    function : Function to add enclosed parameters to as click options.
-
-    Returns:
-    function: Updated function including shared parameters.
+    Decorator function for grouping shared extraction parameters.
+    Defaults are set to None, allowing config file or ultimate defaults to apply.
     """
-
     function = click.option(
         "--crop-size",
         "-c",
@@ -256,8 +265,7 @@ def extract_options(function):
         "--detected-true-depth",
         default="auto",
         type=str,
-        help='Option to override automatic depth estimation during extraction. \
-This is only a debugging parameter, for cases where dilate_iterations > 1, otherwise has no effect. Either "auto" or an int value.',
+        help="Option to override automatic depth estimation during extraction.",
     )(function)
     function = click.option(
         "--compute-raw-scalars",
@@ -267,7 +275,7 @@ This is only a debugging parameter, for cases where dilate_iterations > 1, other
     function = click.option(
         "--flip-classifier",
         default=None,
-        help="path to the flip classifier used to properly orient the mouse (.pkl file)",
+        help="Path to the flip classifier used to properly orient the mouse (.pkl file)",
     )(function)
     function = click.option(
         "--flip-classifier-smoothing",
@@ -279,7 +287,7 @@ This is only a debugging parameter, for cases where dilate_iterations > 1, other
         "--graduate-walls",
         default=False,
         type=bool,
-        help="Graduates and dilates the background image to compensate for slanted bucket walls. \\_/",
+        help="Graduates and dilates the background image to compensate for slanted bucket walls.",
     )(function)
     function = click.option(
         "--widen-radius",
@@ -338,7 +346,7 @@ This is only a debugging parameter, for cases where dilate_iterations > 1, other
     function = click.option(
         "--cable-filter-shape",
         default="rectangle",
-        type=str,
+        type=click.Choice(["rectangle", "ellipse"]),
         help="Cable filter shape (rectangle or ellipse)",
     )(function)
     function = click.option(
@@ -357,7 +365,10 @@ This is only a debugging parameter, for cases where dilate_iterations > 1, other
         "--tail-filter-size", default=(9, 9), type=(int, int), help="Tail filter size"
     )(function)
     function = click.option(
-        "--tail-filter-shape", default="ellipse", type=str, help="Tail filter shape"
+        "--tail-filter-shape",
+        default="ellipse",
+        type=click.Choice(["rectangle", "ellipse"]),
+        help="Tail filter shape",
     )(function)
     function = click.option(
         "--spatial-filter-size",
@@ -369,7 +380,6 @@ This is only a debugging parameter, for cases where dilate_iterations > 1, other
     )(function)
     function = click.option(
         "--temporal-filter-size",
-        "-t",
         default=[0],
         type=int,
         help="Time prefilter kernel (median filter, must be odd)",
@@ -454,66 +464,34 @@ This is only a debugging parameter, for cases where dilate_iterations > 1, other
 
 @cli.command(
     name="find-roi",
-    cls=command_with_config("config_file"),
     help="Finds the ROI (the arena) and background to subtract from frames when extracting.",
 )
 @click.argument("input-file", type=click.Path(exists=True))
 @common_roi_options
-def find_roi(input_file, output_dir, **config_data):
-
-    get_roi_wrapper(input_file, config_data, output_dir)
+def find_roi(input_file, output_dir, **kwargs):
+    get_roi_wrapper(input_file, kwargs, output_dir)
 
 
 @cli.command(
     name="extract",
-    cls=command_with_config("config_file"),
-    help="Processes raw input depth recordings to output a cropped and oriented"
+    help="Processes raw input depth recordings to output a cropped and oriented "
     "video of the mouse and saves the output+metadata to h5 files in the given output directory.",
 )
 @click.argument("input-file", type=click.Path(exists=True, resolve_path=False))
-@click.option(
-    "--cluster-type",
-    type=click.Choice(["local", "slurm"]),
-    default="local",
-    help="Platform to train models on",
-)
 @common_roi_options
 @common_avi_options
 @extract_options
-def extract(input_file, output_dir, num_frames, skip_completed, **config_data):
-
+def extract(input_file, output_dir, num_frames, skip_completed, **kwargs):
     extract_wrapper(
-        input_file, output_dir, config_data, num_frames=num_frames, skip=skip_completed
+        input_file, output_dir, kwargs, num_frames=num_frames, skip=skip_completed
     )
 
 
 @cli.command(
     name="batch-extract",
-    cls=command_with_config("config_file"),
-    help="Batch processes " "all the raw depth recordings located in the input folder.",
+    help="Batch processes all the raw depth recordings located in the input folder.",
 )
 @click.argument("input-folder", type=click.Path(exists=True, resolve_path=False))
-@common_roi_options
-@common_avi_options
-@extract_options
-@click.option(
-    "--extensions",
-    default=[".dat"],
-    type=str,
-    help="File extension of raw data",
-    multiple=True,
-)
-@click.option(
-    "--skip-checks",
-    is_flag=True,
-    help="Flag: skip checks for the existance of a metadata file",
-)
-@click.option(
-    "--extract-out-script",
-    type=click.Path(),
-    default="extract_out.sh",
-    help="Name of bash script file to save extract commands.",
-)
 @click.option(
     "--cluster-type",
     type=click.Choice(["local", "slurm"]),
@@ -538,112 +516,125 @@ def extract(input_file, output_dir, num_frames, skip_completed, **config_data):
     "--get-cmd", is_flag=True, default=True, help="Print scan command strings."
 )
 @click.option("--run-cmd", is_flag=True, help="Run scan command strings.")
+@click.option(
+    "--extract-out-script",
+    type=click.Path(),
+    default="extract_out.sh",
+    help="Name of bash script file to save extract commands.",
+)
+@common_roi_options
+@common_avi_options
+@extract_options
+@click.option(
+    "--extensions",
+    default=[".dat"],
+    type=str,
+    help="File extension of raw data",
+    multiple=True,
+)
+@click.option(
+    "--skip-checks",
+    is_flag=True,
+    help="Flag: skip checks for the existence of a metadata file",
+)
+@click.pass_context
 def batch_extract(
+    ctx,
     input_folder,
-    output_dir,
-    skip_completed,
-    num_frames,
-    extensions,
-    skip_checks,
-    **config_data,
+    **kwargs,
 ):
 
-    # check if there is a config file
-    config_file = config_data.get("config_file")
-    if not config_file:
-        # Add message to tell the users to specify a config file
-        print(
-            "Command not run. Please specified a config file using --config-file flag."
-        )
-        return
+    output_dir = kwargs["output_dir"]
+    skip_completed = kwargs["skip_completed"]
 
-    # Add message to tell the users to specify a config file
     to_extract = []
-    for ex in extensions:
+    for ex in kwargs["extensions"]:
+        yaml_path = os.path.join(output_dir, "results_00.yaml")
         to_extract.extend(
             recursive_find_unextracted_dirs(
                 input_folder,
                 extension=ex,
-                skip_checks=True if ex in (".tgz", ".tar.gz") else skip_checks,
-                yaml_path=os.path.join(output_dir, "results_00.yaml"),
+                skip_checks=ex in (".tgz", ".tar.gz") or kwargs["skip_checks"],
+                yaml_path=yaml_path,
             )
         )
 
-    # Add message when all sessions are extracted
     if len(to_extract) == 0:
         print(
-            'No session to be extracted. If you want to re-extract the data, please add "--skip-checks"'
+            "No new sessions to be extracted. If you want to re-extract, "
+            "ensure --skip-completed is set to false or (re)move existing results."
         )
         return
 
-    if config_data["cluster_type"] == "local":
-        # the session specific config doesn't get generated in session proc file
-        # session specific config direct used in config_data dictionary in extraction from extract_command function
-        run_local_extract(to_extract, config_file, skip_completed)
+    config_path = ctx.obj.get("config_path")
+    if kwargs["cluster_type"] == "local":
+        run_local_extract(to_extract, config_path, skip_completed)
     else:
-        # add paramters to config
-        config_data["session_config_path"] = (
-            read_yaml(config_file).get("session_config_path", "")
-            if config_file is not None
-            else ""
-        )
-        config_data["config_file"] = os.path.abspath(config_file)
-        config_data["output_dir"] = output_dir
-        config_data["skip_completed"] = skip_completed
-        config_data["num_frames"] = num_frames
-        config_data["extensions"] = extensions
-        config_data["skip_checks"] = skip_checks
-        # run slurm extract will generate a config.yaml in session proc file for slurm
-        run_slurm_extract(input_folder, to_extract, config_data, skip_completed)
+        # TODO: see if "session_config_path" is defined
+        kwargs["config_file"] = config_path
+        run_slurm_extract(input_folder, to_extract, kwargs, skip_completed)
 
 
 @cli.command(
     name="download-flip-file",
     help="Downloads Flip-correction model that helps with orienting the mouse during extraction.",
 )
-@click.argument(
-    "config-file",
-    type=click.Path(exists=True, resolve_path=False),
-    default="config.yaml",
-)
 @click.option(
     "--output-dir",
     type=click.Path(),
     default=os.getcwd(),
-    help="Output directory for downloaded flip flie",
+    help="Output directory for downloaded flip file",
 )
-def download_flip_file(config_file, output_dir):
-
-    flip_file_wrapper(config_file, output_dir)
+@click.pass_context
+def download_flip_file(ctx, output_dir):
+    # TODO: test fix - get config file path
+    config_path = ctx.obj.get("config_path")
+    flip_file_wrapper(config_path, output_dir)
 
 
 @cli.command(
     name="generate-config",
     help="Generates a configuration file (config.yaml) that holds editable options for extraction parameters.",
 )
-@click.option("--output-file", "-o", type=click.Path(), default="config.yaml")
+@click.option("--output-file", "-o", type=click.Path(), default="config.toml")
 @click.option(
     "--camera-type",
     default="k2",
-    type=str,
+    type=click.Choice(["k2", "azure", "auto"]),
     help="specify the camera type (k2 or azure), default is k2",
 )
 def generate_config(output_file, camera_type):
+    """Copy default TOML and patch selected fields via sed to keep comments/structure."""
+    import shutil
 
-    _yaml = YAML(typ='safe', pure=True)
-    objs = extract.params
-    params = {tmp.name: tmp.default for tmp in objs if not tmp.required}
+    script_path = Path(__file__).parent
+    default_path = script_path / "default-config.toml"
+    shutil.copy(default_path, output_file)
+
     if camera_type == "azure":
-        params["bg_roi_depth_range"] = [550, 650]
-        params["spatial_filter_size"] = [5]
-        params["tail_filter_size"] = [15, 15]
-        params["crop_size"] = [120, 120]
-        params["camera_type"] = "azure"
+        replacements = [
+            ("bg_roi_depth_range", "[ 550, 650 ]"),
+            ("spatial_filter_size", "[ 5 ]"),
+            ("tail_filter_size", "[ 15, 15 ]"),
+            ("crop_size", "[ 120, 120 ]"),
+            ("camera_type", '"azure"'),
+        ]
 
-    with open(output_file, "w") as f:
-        _yaml.dump(params, f)
+        with open(output_file, "r") as f:
+            lines = f.readlines()
 
-    print("Successfully generated config file in base directory.")
+        new_lines = []
+        for line in lines:
+            for key, val in replacements:
+                if key in line:
+                    line = f"{key} = {val}\n"
+                    break
+            new_lines.append(line)
+
+        with open(output_file, "w") as f:
+            f.writelines(new_lines)
+
+    print(f"Successfully generated config file at {output_file}.")
 
 
 @cli.command(
@@ -665,11 +656,10 @@ def generate_config(output_file, camera_type):
     help="Location for storing index",
 )
 def generate_index(input_dir, output_file):
+    generated_file = generate_index_wrapper(input_dir, output_file)
 
-    output_file = generate_index_wrapper(input_dir, output_file)
-
-    if output_file is not None:
-        print(f"Index file: {output_file} was successfully generated.")
+    if generated_file is not None:
+        print(f"Index file: {generated_file} was successfully generated.")
 
 
 @cli.command(
@@ -688,7 +678,7 @@ def generate_index(input_dir, output_file):
     "-f",
     type=str,
     default="{start_time}_{session_name}_{subject_name}",
-    help="New file name formats from resepective metadata",
+    help="New file name formats from respective metadata",
 )
 @click.option(
     "--output-dir",
@@ -720,7 +710,6 @@ def aggregate_extract_results(input_dir, format, output_dir, mouse_threshold):
     help="Directory for aggregated results folder",
 )
 def agg_to_index(input_dir):
-
     generate_index_from_agg_res_wrapper(input_dir)
 
 
@@ -731,7 +720,7 @@ def agg_to_index(input_dir):
 @click.argument("input-file", type=click.Path(exists=True, resolve_path=False))
 @common_avi_options
 def convert_raw_to_avi(
-    input_file, output_file, chunk_size, fps, delete, threads, mapping
+    input_file, output_file, chunk_size, fps, delete, threads, mapping,
 ):
 
     convert_raw_to_avi_wrapper(
@@ -753,7 +742,14 @@ def convert_raw_to_avi(
     help="Slice indices used for copy",
 )
 def copy_slice(
-    input_file, output_file, copy_slice, chunk_size, fps, delete, threads, mapping
+    input_file,
+    output_file,
+    copy_slice,
+    chunk_size,
+    fps,
+    delete,
+    threads,
+    mapping,
 ):
 
     copy_slice_wrapper(
