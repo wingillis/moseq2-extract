@@ -1,31 +1,31 @@
 [build-system]
-requires = ["setuptools>=61.0", "wheel", "setuptools_scm[toml]>=6.2"]
+requires = ["setuptools>=61.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
+version = "2.0.0"  # major version update for upgraded python and config
 name = "moseq2-extract"
 authors = [
     {name = "Datta Lab"}
 ]
 description = "To boldly go where no mouse has gone before"
-dynamic = ["version"]
 readme = "README.md"
-requires-python = ">=3.6,<3.8"
+requires-python = ">=3.10"
 dependencies = [
-    "h5py",
-    "tqdm>=4.48.0",
-    "scipy",
-    "numpy",
-    "click==7.0",
-    "joblib",
-    "cytoolz",
-    "matplotlib",
-    "statsmodels",
-    "scikit-image",
-    "scikit-learn",
-    "opencv-python",
-    "ruamel.yaml",
-    "tifffile",
+    "h5py>=3.13.0",
+    "tqdm>=4.67.1",
+    "scipy>=1.15.2",
+    "numpy>=2.2.5",
+    "click>=8.1.8",
+    "joblib>=1.4.2",
+    "cytoolz>=1.0.1",
+    "matplotlib>=3.10.1",
+    "statsmodels>=0.14.4",
+    "scikit-image>=0.25.2",
+    "scikit-learn>=1.6.1",
+    "opencv-python-headless>=4.11.0.86",
+    "ruamel-yaml>=0.18.10",
+    "tifffile>=2025.3.30",
 ]
 
 [project.optional-dependencies]
@@ -38,17 +38,14 @@ docs = [
 [project.scripts]
 moseq2-extract = "moseq2_extract.cli:cli"
 
-[tool.setuptools_scm]
-write_to = "moseq2_extract/_version.py"
-
-[tool.setuptools.dynamic]
-version = {attr = "moseq2_extract.__version__"}
-
 # Optional development tools configuration
 [tool.black]
 line-length = 88
-target-version = ['py37']
+target-version = ['py310']
 
 [tool.isort]
 profile = "black"
 multi_line_output = 3
+
+[tool.setuptools.packages.find]
+where = ["moseq2_extract"]
