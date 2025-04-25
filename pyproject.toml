@@ -41,7 +41,7 @@ moseq2-extract = "moseq2_extract.cli:cli"
 
 # Optional development tools configuration
 [tool.black]
-line-length = 88
+line-length = 100
 target-version = ['py311']
 
 [tool.isort]
