@@ -3,14 +3,14 @@ requires = ["setuptools>=61.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-version = "2.0.0"  # major version update for upgraded python and config
+dynamic = ["version"]
 name = "moseq2-extract"
 authors = [
     {name = "Datta Lab"}
 ]
 description = "To boldly go where no mouse has gone before"
 readme = "README.md"
-requires-python = ">=3.10"
+requires-python = ">=3.11"
 dependencies = [
     "h5py>=3.13.0",
     "tqdm>=4.67.1",
@@ -41,7 +41,7 @@ moseq2-extract = "moseq2_extract.cli:cli"
 # Optional development tools configuration
 [tool.black]
 line-length = 88
-target-version = ['py310']
+target-version = ['py311']
 
 [tool.isort]
 profile = "black"
@@ -49,3 +49,6 @@ multi_line_output = 3
 
 [tool.setuptools.packages.find]
 where = ["moseq2_extract"]
+
+[tool.setuptools.dynamic]
+version = {attr = "moseq2_extract.__version__"}
