@@ -27,11 +27,9 @@ from moseq2_extract.util import (
     make_gradient,
     graduate_dilated_wall_area,
     convert_raw_to_avi_function,
-    command_with_config,
     recursive_find_h5s,
     clean_file_str,
     load_textdata,
-    time_str_for_filename,
     build_path,
     read_yaml,
     detect_and_set_camera_parameters,
@@ -123,11 +121,6 @@ class TestExtractUtils(TestCase):
         assert timestamps.all() is not None
         assert len(data) == len(timestamps)
 
-    def test_time_str_for_filename(self):
-
-        test_out = time_str_for_filename("12:12:12")
-        truth_out = "12-12-12"
-        assert test_out == truth_out
 
     def test_recursive_find_h5s(self):
 
@@ -299,6 +292,3 @@ class TestExtractUtils(TestCase):
         print(proc_dirs)
         assert len(proc_dirs) == 1
         os.remove(data_path)
-
-    def test_command_with_config(self):
-        command_with_config(find_roi)

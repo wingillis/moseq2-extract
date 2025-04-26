@@ -34,7 +34,6 @@ from moseq2_extract.helpers.data import (
 from moseq2_extract.util import (
     select_strel,
     gen_batch_sequence,
-    scalar_attributes,
     convert_raw_to_avi_function,
     set_bground_to_plane_fit,
     recursive_find_h5s,
@@ -46,6 +45,7 @@ from moseq2_extract.util import (
     get_frame_range_indices,
     check_filter_sizes,
     get_strels,
+    SCALAR_ATTRIBUTES,
 )
 
 
@@ -402,8 +402,7 @@ def extract_wrapper(input_file, output_dir, config_data, num_frames=None, skip=F
         *config_data["frame_trim"], nframes
     )
 
-    scalars_attrs = scalar_attributes()
-    scalars = list(scalars_attrs)
+    scalars = list(SCALAR_ATTRIBUTES)
 
     # Get frame chunks to extract
     frame_batches = gen_batch_sequence(
@@ -483,7 +482,7 @@ def extract_wrapper(input_file, output_dir, config_data, num_frames=None, skip=F
             acquisition_metadata=acquisition_metadata,
             config_data=config_data,
             status_dict=status_dict,
-            scalars_attrs=scalars_attrs,
+            scalars_attrs=SCALAR_ATTRIBUTES,
         )
 
         # Write crop-rotated results to h5 file and write video preview mp4 file

@@ -12,14 +12,37 @@ import tarfile
 import warnings
 import numpy as np
 from glob import glob
+from pathlib import Path
 from copy import deepcopy
 from ruamel.yaml import YAML
-yaml = YAML(typ='safe', pure=True)
-from typing import Pattern
-from cytoolz import valmap
+from datetime import datetime
+from cytoolz import valmap, concat
 from moseq2_extract.io.image import write_image
+from ruamel.yaml.error import UnsafeLoaderWarning
 from moseq2_extract.io.video import get_movie_info
-from os.path import join, exists, splitext, basename, abspath, dirname
+from os.path import join, exists, splitext, basename, dirname
+
+
+# provides a definition for each scalar recorded in h5 file
+SCALAR_ATTRIBUTES = {
+    'centroid_x_px': 'X centroid (pixels)',
+    'centroid_y_px': 'Y centroid (pixels)',
+    'velocity_2d_px': '2D velocity (pixels / frame), note that missing frames are not accounted for',
+    'velocity_3d_px': '3D velocity (pixels / frame), note that missing frames are not accounted for, also height is in mm, not pixels for calculation',
+    'width_px': 'Mouse width (pixels)',
+    'length_px': 'Mouse length (pixels)',
+    'area_px': 'Mouse area (pixels)',
+    'centroid_x_mm': 'X centroid (mm)',
+    'centroid_y_mm': 'Y centroid (mm)',
+    'velocity_2d_mm': '2D velocity (mm / frame), note that missing frames are not accounted for',
+    'velocity_3d_mm': '3D velocity (mm / frame), note that missing frames are not accounted for',
+    'width_mm': 'Mouse width (mm)',
+    'length_mm': 'Mouse length (mm)',
+    'area_mm': 'Mouse area (mm)',
+    'height_ave_mm': 'Mouse average height (mm)',
+    'angle': 'Angle (radians, unwrapped)',
+    'velocity_theta': 'Angular component of velocity (arctan(vel_x, vel_y))'
+}
 
 
 def filter_warnings(func):
@@ -36,77 +59,12 @@ def filter_warnings(func):
     """
     def apply_warning_filters(*args, **kwargs):
         with warnings.catch_warnings():
-            warnings.simplefilter('ignore', yaml.error.UnsafeLoaderWarning)
+            warnings.simplefilter('ignore', UnsafeLoaderWarning)
             warnings.simplefilter(action='ignore', category=FutureWarning)
             warnings.simplefilter(action='ignore', category=UserWarning)
             return func(*args, **kwargs)
     return apply_warning_filters
 
-
-# from https://stackoverflow.com/questions/46358797/
-# python-click-supply-arguments-and-options-from-a-configuration-file
-def command_with_config(config_file_param_name):
-    """
-    Override default CLI variables with the values contained within the config.yaml being passed.
-
-    Args:
-    config_file_param_name (str): path to config file.
-
-    Returns:
-    custom_command_class (function): decorator function to update click.Command parameters with the config_file
-    parameter values.
-    """
-
-    class custom_command_class(click.Command):
-
-        def invoke(self, ctx):
-            # grab the config file
-            config_file = ctx.params[config_file_param_name]
-            param_defaults = {p.human_readable_name: p.default for p in self.params
-                              if isinstance(p, click.core.Option)}
-            param_defaults = {k: tuple(v) if type(v) is list else v for k, v in param_defaults.items()}
-            param_cli = {k: tuple(v) if type(v) is list else v for k, v in ctx.params.items()}
-
-            if config_file is not None:
-
-                config_data = read_yaml(config_file)
-                # set config_data['output_file'] ['output_dir'] ['input_dir'] to None to avoid overwriting previous files
-                # assuming users would either input their own paths or use the default path
-                config_data['input_dir'] = None
-                config_data['output_dir'] = None
-                config_data['output_file'] = None
-
-                # modified to only use keys that are actually defined in options and the value is not not none
-                config_data = {k: tuple(v) if isinstance(v, yaml.comments.CommentedSeq) else v
-                               for k, v in config_data.items() if k in param_defaults.keys() and v is not None}
-
-                # find differences btw config and param defaults
-                diffs = set(param_defaults.items()) ^ set(param_cli.items())
-
-                # combine defaults w/ config data
-                combined = {**param_defaults, **config_data}
-
-                # update cli params that are non-default
-                keys = [d[0] for d in diffs]
-                for k in set(keys):
-                    combined[k] = ctx.params[k]
-
-                ctx.params = combined
-                
-                # add new parameters to the original config file
-                config_data = read_yaml(config_file)
-                
-                # remove flags from combined so the flag values in config.yaml won't get overwritten
-                flag_list = ['manual_set_depth_range', 'use_plane_bground', 'progress_bar', 'delete', 'compute_raw_scalars', 'skip_completed', 'skip_checks', 'get_cmd', 'run_cmd']
-                combined = {k:v for k, v in combined.items() if k not in flag_list}
-                # combine original config data and the combined params prioritizing the combined
-                config_data = {**config_data, **combined}
-                # with open(config_file, 'w') as f:
-                #     yaml.dump(config_data, f)
-
-            return super().invoke(ctx)
-
-    return custom_command_class
 
 def set_bground_to_plane_fit(bground_im, plane, output_dir):
     """
@@ -385,26 +343,23 @@ def load_metadata(metadata_file):
 
     return metadata
 
-def load_found_session_paths(input_dir, exts):
+def load_found_session_paths(input_dir: str | Path, exts: list[str] | str) -> list[Path]:
     """
-    Find all depth files with the specified extension recursively in input directory.
+    Find all files with the specified extension recursively in input directory.
 
     Args:
-    input_dir (str): path to project base directory holding all the session sub-folders.
+    input_dir (str or Path): path to project base directory holding all the session sub-folders.
     exts (list or str): list of extensions to search for, or a single extension in string form.
 
     Returns:
-    files (list): sorted list of all paths to found depth files
+    files (list): sorted list of all paths to found files with provided extensions.
     """
+    input_dir = Path(input_dir).absolute()
 
     if not isinstance(exts, (tuple, list)):
         exts = [exts]
 
-    files = []
-    for ext in exts:
-        files.extend(glob(join(input_dir, '*/*' + ext), recursive=True))
-
-    return sorted(files)
+    return sorted(concat(input_dir.glob('**/*' + ext) for ext in exts))
 
 def get_strels(config_data):
     """
@@ -480,38 +435,6 @@ def convert_pxs_to_mm(coords, resolution=(512, 424), field_of_view=(70.6, 60), t
     new_coords[:, 1] = true_depth * yhat / fh
 
     return new_coords
-
-
-def scalar_attributes():
-    """
-    Gets scalar attributes dict with names paired with descriptions.
-
-    Returns:
-    attributes (dict): a dictionary of metadata keys and descriptions.
-    """
-
-    attributes = {
-        'centroid_x_px': 'X centroid (pixels)',
-        'centroid_y_px': 'Y centroid (pixels)',
-        'velocity_2d_px': '2D velocity (pixels / frame), note that missing frames are not accounted for',
-        'velocity_3d_px': '3D velocity (pixels / frame), note that missing frames are not accounted for, also height is in mm, not pixels for calculation',
-        'width_px': 'Mouse width (pixels)',
-        'length_px': 'Mouse length (pixels)',
-        'area_px': 'Mouse area (pixels)',
-        'centroid_x_mm': 'X centroid (mm)',
-        'centroid_y_mm': 'Y centroid (mm)',
-        'velocity_2d_mm': '2D velocity (mm / frame), note that missing frames are not accounted for',
-        'velocity_3d_mm': '3D velocity (mm / frame), note that missing frames are not accounted for',
-        'width_mm': 'Mouse width (mm)',
-        'length_mm': 'Mouse length (mm)',
-        'area_mm': 'Mouse area (mm)',
-        'height_ave_mm': 'Mouse average height (mm)',
-        'angle': 'Angle (radians, unwrapped)',
-        'velocity_theta': 'Angular component of velocity (arctan(vel_x, vel_y))'
-    }
-
-    return attributes
-
 
 def convert_raw_to_avi_function(input_file, chunk_size=2000, fps=30, delete=False, threads=3):
     """
@@ -616,54 +539,83 @@ def dict_to_h5(h5, dic, root='/', annotations=None):
                 h5[dest].attrs['description'] = annotations[key]
 
 
-def recursive_find_h5s(root_dir=os.getcwd(),
-                       ext='.h5',
-                       yaml_string='{}.yaml'):
+def _walk_and_filter(root_dir, filter_func):
     """
-    Recursively find h5 files, along with yaml files with the same basename
+    Helper to walk a directory recursively and apply a filter function to each file.
+
+    Args:
+        root_dir (str): The root directory to start walking from.
+        filter_func (callable): A function that takes (root, file_name) and returns True
+                                if the file should be included, False otherwise.
+
+    Returns:
+        list[str]: A list of absolute paths to the files that passed the filter.
+    """
+    matched_paths = []
+    abs_root_dir = Path(root_dir).absolute()
+    for root, _, files in os.walk(abs_root_dir):
+        root = Path(root)
+        for file_path in map(lambda f: root / f, files):
+            if filter_func(file_path):
+                matched_paths.append(file_path)
+    return matched_paths
+
+
+def recursive_find_h5s(root_dir=Path.cwd(),
+                       ext='.h5',
+                       yaml_suffix='.yaml'):
+    """
+    Recursively find h5 files, along with yaml files with the same basename,
+    that contain a 'frames' dataset.
 
     Args:
     root_dir (str): path to base directory to begin recursive search in.
     ext (str): extension to search for
-    yaml_string (str): string for filename formatting when saving data
+    yaml_suffix (str): string for filename formatting when finding related yaml files
 
     Returns:
-    h5s (list): list of found h5 files
-    dicts (list): list of found metadata files
-    yamls (list): list of found yaml files
+    h5s (list): list of found h5 files meeting criteria
+    dicts (list): list of corresponding loaded yaml file contents as dictionaries
+    yamls (list): list of corresponding found yaml file paths
     """
     if not ext.startswith('.'):
         ext = '.' + ext
 
-    def has_frames(f):
+    def has_frames(f_path: Path):
         try:
-            with h5py.File(f, 'r') as h5f:
+            with h5py.File(f_path, 'r') as h5f:
                 return 'frames' in h5f
         except OSError:
-            warnings.warn(f'Error reading {f}, skipping...')
+            warnings.warn(f'Error reading {f_path}, skipping...')
+            return False
+        except Exception as e:
+            warnings.warn(f'Unexpected error reading {f_path}: {e}, skipping...')
             return False
 
-    h5s = glob(join(abspath(root_dir), '**', f'*{ext}'), recursive=True)
-    h5s = filter(lambda f: exists(yaml_string.format(f.replace(ext, ''))), h5s)
-    h5s = list(filter(has_frames, h5s))
-    yamls = list(map(lambda f: yaml_string.format(f.replace(ext, '')), h5s))
-    dicts = list(map(read_yaml, yamls))
+    def _filter_h5(h5_path: Path):
+        if h5_path.suffix != ext:
+            return False
 
-    return h5s, dicts, yamls
+        yaml_file = h5_path.with_suffix(yaml_suffix)
+        return yaml_file.exists() and has_frames(h5_path)
 
+    # Use the helper function to find valid H5 files
+    h5s_final = _walk_and_filter(root_dir, _filter_h5)
 
-def escape_path(path):
-    """
-    Return a path to return to original base directory.
+    # Generate corresponding yamls and dicts, handling potential read errors
+    yamls = []
+    dicts = []
+    valid_h5s = []
+    for h5_file in h5s_final:
+        yaml_file = h5_file.with_suffix(yaml_suffix)
+        try:
+            dicts.append(read_yaml(yaml_file))
+            yamls.append(yaml_file)
+            valid_h5s.append(h5_file) # Keep h5 file only if yaml read succeeds
+        except Exception as e_read:
+            warnings.warn(f"Skipping H5 {h5_file} due to error reading YAML {yaml_file}: {e_read}")
 
-    Args:
-    path (str): path to current working dir
-
-    Returns:
-    path (str): path to original base_dir
-    """
-
-    return re.sub(r'\s', '\ ', path)
+    return valid_h5s, dicts, yamls
 
 
 def clean_file_str(file_str: str, replace_with: str = '-') -> str:
@@ -714,21 +666,6 @@ def load_textdata(data_file, dtype=np.float32):
     return data, timestamps
 
 
-def time_str_for_filename(time_str: str) -> str:
-    """
-    Process the timestamp to be used in the filename.
-
-    Args:
-    time_str (str): time str to format
-
-    Returns:
-    out (str): formatted timestamp str
-    """
-
-    out = time_str.split('.')[0]
-    out = out.replace(':', '-').replace('T', '_')
-    return out
-
 def build_path(keys: dict, format_string: str, snake_case=True) -> str:
     """
     Produce a new file name using keys collected from extraction h5 files.
@@ -743,8 +680,9 @@ def build_path(keys: dict, format_string: str, snake_case=True) -> str:
     """
 
     if 'start_time' in keys:
-        # process the time value
-        keys['start_time'] = time_str_for_filename(keys['start_time'])
+        # Parse the ISO‐8601 timestamp (with offset) and format for filenames
+        dt = datetime.fromisoformat(keys['start_time'])
+        keys['start_time'] = dt.strftime("%Y-%m-%d_%H-%M-%S")
 
     if snake_case:
         keys = valmap(camel_to_snake, keys)
@@ -761,6 +699,7 @@ def read_yaml(yaml_file):
     Returns:
     return_dict (dict): dict of yaml contents
     """
+    yaml = YAML(typ='safe', pure=True)
 
     with open(yaml_file, 'r') as f:
         return yaml.load(f)
@@ -821,10 +760,10 @@ def h5_to_dict(h5file, path) -> dict:
     elif isinstance(h5file, h5py.File):
         out = _load_h5_to_dict(h5file, path)
     else:
-        raise Exception('file input not understood - need h5 file path or file object')
+        raise ValueError('file input not understood - need h5 file path or file object')
     return out
 
-def clean_dict(dct):
+def clean_dict(dct: dict) -> dict:
     """
     Standardize types of dict value.
 
@@ -848,23 +787,13 @@ def clean_dict(dct):
 
     return valmap(clean_entry, dct)
 
-_underscorer1: Pattern[str] = re.compile(r'(.)([A-Z][a-z]+)')
-_underscorer2 = re.compile('([a-z0-9])([A-Z])')
+_underscorer = re.compile(r'(?<!^)(?=[A-Z])')
 
-def camel_to_snake(s):
+def camel_to_snake(s: str) -> str:
     """
-    Convert CamelCase to snake_case
-
-    Args:
-    s (str): CamelCase string to convert to snake_case.
-
-    Returns:
-    (str): string in snake_case
+    Convert CamelCase to snake_case.
     """
-
-    subbed = _underscorer1.sub(r'\1_\2', s)
-    return _underscorer2.sub(r'\1_\2', subbed).lower()
-
+    return _underscorer.sub('_', s).lower()
 
 def recursive_find_unextracted_dirs(root_dir=os.getcwd(),
                                     session_pattern=r'session_\d+\.(?:tgz|tar\.gz)',
@@ -873,44 +802,63 @@ def recursive_find_unextracted_dirs(root_dir=os.getcwd(),
                                     metadata_path='metadata.json',
                                     skip_checks=False):
     """
-    Recursively find unextracted (or incompletely extracted) directories
+    Recursively find unextracted (or incompletely extracted) directories by checking
+    for source data files (.dat or archives) and the status of their expected outputs.
 
     Args:
-    root_dir (str): path to base directory to start recursive search for unextracted folders.
-    session_pattern (str): folder name pattern to search for
-    extension (str): file extension to search for
-    yaml_path (str): path to respective extracted metadata
-    metadata_path (str): path to relative metadata.json files
-    skip_checks (bool): indicates whether to check if the files exist at the given relative paths
+    root_dir (str): path to base directory to start recursive search.
+    session_pattern (str): regex pattern for session archive filenames.
+    extension (str): file extension for raw data files.
+    yaml_path (str): relative path from session dir to the completion status yaml file.
+    metadata_path (str): relative path from session dir (or root for archives) to the metadata json file.
+    skip_checks (bool): if True, skip checking completion status and metadata existence.
 
     Returns:
-    proc_dirs (1d-list): list of paths to each unextracted session's proc/ directory
+    proc_dirs (list[str]): list of absolute paths to source data files/archives that need processing.
     """
-
     from moseq2_extract.helpers.data import check_completion_status
 
-    session_archive_pattern = re.compile(session_pattern)
+    session_archive_re = re.compile(session_pattern)
 
-    proc_dirs = []
-    for root, _, files in os.walk(root_dir):
-        for file in files:
-            if file.endswith(extension) and not file.startswith("ir"):  # test for uncompressed session
-                status_file = join(root, yaml_path)
-                metadata_file = join(root, metadata_path)
-            elif session_archive_pattern.fullmatch(file):  # test for compressed session
-                session_name = basename(file).replace('.tar.gz', '').replace('.tgz', '')
-                status_file = join(root, session_name, yaml_path)
-                metadata_file = join(root, '{}.json'.format(session_name))
-            else:
-                continue  # skip this current file as it does not look like session data
+    def _filter_unextracted(file_path: Path):
+        status_file = None
+        metadata_file = None
+        is_candidate = False
 
-            # perform checks, append depth file to list if extraction is missing or incomplete
-            if skip_checks or (not check_completion_status(status_file) and exists(metadata_file)):
-                proc_dirs.append(join(root, file))
+        # Check for uncompressed session data
+        if file_path.suffix == extension and not file_path.name.startswith("ir"):
+            status_file = file_path.parent / yaml_path
+            metadata_file = file_path.with_name(metadata_path)
+            is_candidate = True
+        # Check for compressed session archive
+        elif session_archive_re.fullmatch(file_path.name):
+
+            session_name = file_path.with_suffix('')
+            # Status YAML is expected inside the extracted folder structure
+            status_file = session_name / yaml_path
+            # Metadata JSON is expected alongside the archive, named after the session
+            metadata_file = session_name.with_suffix(".json")
+            is_candidate = True
+
+        if not is_candidate: return False # Not a file type we are looking for
+
+        # If skipping checks, any candidate needs processing
+        if skip_checks: return True
+
+        # Check if status indicates incomplete and metadata exists
+        try:
+            is_complete = check_completion_status(status_file)
+            return not is_complete and metadata_file.exists()
+        except Exception as e:
+            warnings.warn(f"Error checking status for {file_path}: {e}. Skipping.")
+            return False
+
+    # Use the helper function to find paths needing processing
+    proc_dirs = _walk_and_filter(root_dir, _filter_unextracted)
 
     return proc_dirs
 
-def click_param_annot(click_cmd):
+def click_param_annot(click_cmd: click.Command) -> dict[str, str]:
     """
     Return a dict that maps option names to help strings from a click.Command instance.
 
