@@ -2,14 +2,12 @@ import os
 import cv2
 import h5py
 import json
-import shutil
 import numpy as np
 from ruamel.yaml import YAML
 yaml = YAML(typ='safe', pure=True)
 import numpy.testing as npt
 from unittest import TestCase
 from os.path import exists, dirname
-from moseq2_extract.cli import find_roi
 from moseq2_extract.io.image import read_image
 from ..integration_tests.test_cli import write_fake_movie
 from moseq2_extract.util import (
@@ -20,12 +18,10 @@ from moseq2_extract.util import (
     select_strel,
     scalar_attributes,
     dict_to_h5,
-    click_param_annot,
     strided_app,
     get_strels,
     get_bucket_center,
     make_gradient,
-    graduate_dilated_wall_area,
     convert_raw_to_avi_function,
     recursive_find_h5s,
     clean_file_str,
@@ -254,21 +250,6 @@ class TestExtractUtils(TestCase):
 
         grad = make_gradient(width, height, xc, yc, radx, rady, theta)
         assert grad[grad >= 0.08].all() == True
-
-    def test_graduate_dilated_wall_area(self):
-        img = read_image("data/tiffs/bground_bucket.tiff")
-        roi = read_image("data/tiffs/roi_bucket_01.tiff")
-        true_depth = np.median(img[roi > 0])
-
-        config_data = {"true_depth": true_depth}
-        strel_dilate = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (9, 9))
-        output_dir = "data/tiffs/"
-
-        new_bg = graduate_dilated_wall_area(img, config_data, strel_dilate, output_dir)
-
-        assert np.median(new_bg) > np.median(img)
-        assert os.path.exists("data/tiffs/new_bg.tiff")
-        os.remove("data/tiffs/new_bg.tiff")
 
     def test_strided_app(self):
         test_in = np.array([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11])

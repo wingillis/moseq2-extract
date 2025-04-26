@@ -4,16 +4,13 @@ General utility functions throughout the extract package.
 import os
 import re
 import cv2
-import math
 import json
 import h5py
 import click
 import tarfile
 import warnings
 import numpy as np
-from glob import glob
 from pathlib import Path
-from copy import deepcopy
 from ruamel.yaml import YAML
 from datetime import datetime
 from cytoolz import valmap, concat
@@ -901,100 +898,3 @@ def get_bucket_center(img, true_depth, threshold=650):
     cY = int(M["m01"] / M["m00"])
 
     return cX, cY
-
-def make_gradient(width, height, h, k, a, b, theta=0):
-    """
-    Create gradient around bucket floor representing slanted wall values.
-
-    Args:
-    width (int): bounding box width
-    height (int) bounding box height
-    h (int): centroid x coordinate
-    k (int): centroid y coordinate
-    a (int): x-radius of drawn ellipse
-    b (int): y-radius of drawn ellipse
-    theta (float): degree to rotate ellipse in radians. (has no effect if drawing a circle)
-
-    Returns:
-    np.ndarray: numpy array with weighted values from 0.08 -> 0.8 representing the proportion of values
-    to create a gradient from. 0.8 being the proportioned values closest to the circle wall.
-    """
-
-    # https://stackoverflow.com/questions/49829783/draw-a-gradual-change-ellipse-in-skimage/49848093#49848093
-    # Precalculate constants
-    st, ct = math.sin(theta), math.cos(theta)
-    aa, bb = a ** 2, b ** 2
-
-    # Generate (x,y) coordinate arrays
-    y, x = np.mgrid[-k:height - k, -h:width - h]
-
-    # Calculate the weight for each pixel
-    weights = (((x * ct + y * st) ** 2) / aa) + (((x * st - y * ct) ** 2) / bb)
-
-    return np.clip(0.98 - weights, 0, 0.81)
-
-
-def graduate_dilated_wall_area(bground_im, config_data, strel_dilate, output_dir):
-    """
-    Creates a gradient to represent the dilated (now visible) bucket wall regions.
-    Only is used if background is dilated to capture larger rodents in convex shaped buckets (\_/).
-    
-    Args:
-    bground_im (np.ndarray): the computed background image.
-    config_data (dict): dictionary containing helper user configuration parameters.
-    strel_dilate (cv2.structuringElement): dilation structuring element used to dilate background image.
-    output_dir (str): path to save newly computed background to use.
-
-    Returns:
-    bground_im (np.ndarray): the new background image with a gradient around the floor from high to low depth values.
-    """
-
-    # store old and new backgrounds
-    old_bg = deepcopy(bground_im)
-
-    # dilate background size to match ROI size and attribute wall noise to cancel out
-    bground_im = cv2.dilate(old_bg, strel_dilate, iterations=config_data.get('dilate_iterations', 5))
-
-    # determine center of bground roi
-    width, height = bground_im.shape[1], bground_im.shape[0]  # shape of bounding box
-
-    # getting helper user parameters
-    true_depth = config_data['true_depth']
-    xoffset = config_data.get('x_bg_offset', -2)
-    yoffset = config_data.get('y_bg_offset', 2)
-    widen_radius = config_data.get('widen_radius', 0)
-    bg_threshold = config_data.get('bg_threshold', np.median(bground_im))
-
-    # getting bground centroid
-    cx, cy = get_bucket_center(deepcopy(old_bg), true_depth, threshold=bg_threshold)
-
-    # set up gradient
-    h, k = cx + xoffset, cy + yoffset   # centroid of gradient circle
-    a, b = cx + widen_radius + 67, cy + widen_radius + 67 # x,y radii of gradient circle
-    theta = math.pi/24 # gradient angle; arbitrary - used to rotate ellipses.
-
-    # create slant gradient
-    bground_im = np.uint16((make_gradient(width, height, h, k, a, b, theta)) * 255)
-
-    # scale it back to depth
-    bground_im = np.uint16((bground_im/bground_im.max())*true_depth)
-
-    # overlay with actual bucket floor distance
-    if config_data.get('floor_slant', False):
-        ret, thresh = cv2.threshold(old_bg, np.median(old_bg), true_depth, 0)
-        contours, _ = cv2.findContours(thresh.copy().astype(np.uint8), cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
-        mask = np.zeros(bground_im.shape, np.uint8)
-
-        cv2.drawContours(mask, contours, -1, (255), -1)
-
-        tmp = np.where(mask == True, bground_im, old_bg)
-        bground_im = np.where(tmp == 0, bground_im, tmp)
-    else:
-        mask = np.ma.equal(old_bg, old_bg.max())
-        bground_im = np.where(mask == True, old_bg, bground_im)
-
-    bground_im = cv2.GaussianBlur(bground_im, (7, 7), 7)
-
-    write_image(join(output_dir, 'new_bg.tiff'), bground_im, scale=True)
-
-    return bground_im

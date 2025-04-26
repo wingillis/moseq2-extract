@@ -38,7 +38,6 @@ from moseq2_extract.util import (
     set_bground_to_plane_fit,
     recursive_find_h5s,
     clean_dict,
-    graduate_dilated_wall_area,
     get_bucket_center,
     h5_to_dict,
     detect_and_set_camera_parameters,
@@ -454,14 +453,6 @@ def extract_wrapper(input_file, output_dir, config_data, num_frames=None, skip=F
         config_data["true_depth"] = int(config_data["detected_true_depth"])
 
     print("Detected true depth:", config_data["true_depth"])
-
-    if config_data.get("dilate_iterations", 0) > 1 and config_data.get(
-        "graduate_walls"
-    ):
-        print("Dilating background and graduating walls")
-        bground_im = graduate_dilated_wall_area(
-            bground_im, config_data, str_els["strel_dilate"], output_dir
-        )
 
     extraction_data = {
         "bground_im": bground_im,

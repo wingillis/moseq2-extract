@@ -236,22 +236,6 @@ EXTRACT_OPTIONS = [
         },
     ),
     (
-        ["--graduate-walls"],
-        {
-            "default": False,
-            "type": bool,
-            "help": "Graduates and dilates the background image to compensate for slanted bucket walls.",
-        },
-    ),
-    (
-        ["--widen-radius"],
-        {
-            "default": 0,
-            "type": int,
-            "help": "Number of pixels to increase/decrease radius by when graduating bucket walls.",
-        },
-    ),
-    (
         ["--use-cc"],
         {
             "default": True,
