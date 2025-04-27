@@ -192,7 +192,7 @@ class GUITests(TestCase):
         config_data["flip_classifier"] = flip_file
         config_data["use_plane_bground"] = True
         config_data["bg_roi_index"] = 0
-        config_data["bg_sort_roi_by_position"] = True
+        config_data["bg_roi_sort_by_area"] = True
 
         with open(configfile, "w") as f:
             yaml.dump(config_data, f)

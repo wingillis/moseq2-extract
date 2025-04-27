@@ -482,7 +482,7 @@ def create_extract_h5(
 
     # Acquisition Metadata
     for key, value in acquisition_metadata.items():
-        if type(value) is list and len(value) > 0 and type(value[0]) is str:
+        if isinstance(value, list) and len(value) > 0 and isinstance(value[0], str):
             value = [n.encode("utf8") for n in value]
 
         if value is not None:

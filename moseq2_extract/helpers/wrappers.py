@@ -15,7 +15,8 @@ from copy import deepcopy
 from ruamel.yaml import YAML
 yaml = YAML(typ='safe', pure=True)
 from tqdm.auto import tqdm
-from cytoolz import partial
+from cytoolz import partial, keyfilter
+from moseq2_extract.helpers.parameters import MouseProcessing, ArenaParams
 from moseq2_extract.io.image import write_image
 from moseq2_extract.helpers.extract import process_extract_batches
 from moseq2_extract.extract.proc import get_roi, get_bground_im_file
@@ -235,6 +236,12 @@ def get_roi_wrapper(input_file, config_data, output_dir=None):
     first_frame (numpy.ndarray): First frame image to plot in GUI
     """
 
+    # create ArenaParams object
+    filtered_params = keyfilter(
+        lambda k: k in ArenaParams.__dataclass_fields__, config_data
+    )
+    arena_params = ArenaParams(**filtered_params)
+
     if output_dir is None:
         output_dir = join(dirname(input_file), "proc")
     elif exists(output_dir):
@@ -271,11 +278,10 @@ def get_roi_wrapper(input_file, config_data, output_dir=None):
         cX, cY = get_bucket_center(
             bground_im, bground_im.max(), threshold=int(np.median(bground_im) / 2)
         )
-        adjusted_bg_depth_range = bground_im[cY][cX]
-        config_data["bg_roi_depth_range"] = [
-            int(adjusted_bg_depth_range - 50),
-            int(adjusted_bg_depth_range + 50),
-        ]
+        adjusted_bg_depth_range = int(bground_im[cY][cX])
+        arena_params.bg_roi_depth_range = (
+            adjusted_bg_depth_range - 50, adjusted_bg_depth_range + 50
+        )
 
     # pass in config_data['finfo']['dims'] for frame size otherwise frame size is hard coded to 512x424
     first_frame = load_movie_data(
@@ -285,47 +291,37 @@ def get_roi_wrapper(input_file, config_data, output_dir=None):
         join(output_dir, "first_frame.tiff"),
         first_frame,
         scale=True,
-        scale_factor=config_data["bg_roi_depth_range"],
+        scale_factor=arena_params.bg_roi_depth_range,
     )
 
     print("Getting roi...")
-    strel_dilate = select_strel(
-        config_data["bg_roi_shape"], tuple(config_data["bg_roi_dilate"])
-    )
-    strel_erode = select_strel(
-        config_data["bg_roi_shape"], tuple(config_data["bg_roi_erode"])
-    )
 
     rois, plane = get_roi(
         bground_im,
         **config_data,
-        strel_dilate=strel_dilate,
-        strel_erode=strel_erode,
-        get_all_data=False,
+        return_all_data=False,
+        arena_params=arena_params,
     )
 
-    if config_data["use_plane_bground"]:
+    if arena_params.use_plane_bground:
         print("Using plane fit for background...")
         bground_im = set_bground_to_plane_fit(bground_im, plane, output_dir)
 
-    # Sort ROIs by largest mean area to later select largest one (bg_roi_index)
-    if config_data["bg_sort_roi_by_position"]:
-        rois = rois[: config_data["bg_sort_roi_by_position_max_rois"]]
-        rois = [
-            rois[i] for i in np.argsort([np.nonzero(roi)[0].mean() for roi in rois])
-        ]
+    # Sort arena masks by largest mean area
+    if arena_params.bg_roi_sort_by_area:
+        rois = sorted(rois, key=lambda x: np.mean(x > 0), reverse=True)
 
-    if type(config_data["bg_roi_index"]) == int:
-        config_data["bg_roi_index"] = [config_data["bg_roi_index"]]
+    if arena_params.bg_roi_index > len(rois):
+        warnings.warn(
+            f"bg_roi_index {arena_params.bg_roi_index} is greater than number of ROIs {len(rois)}. "
+            "Setting bg_roi_index to 0."
+        )
+        arena_params.bg_roi_index = 0
 
-    bg_roi_index = [
-        idx for idx in config_data["bg_roi_index"] if idx in range(len(rois))
-    ]
-    roi = rois[bg_roi_index[0]]
+    roi = rois[arena_params.bg_roi_index]
 
-    for idx in bg_roi_index:
-        roi_filename = f"roi_{idx:02d}.tiff"
-        write_image(join(output_dir, roi_filename), rois[idx], scale=True)
+    roi_filename = f"roi_{arena_params.bg_roi_index:02d}.tiff"
+    write_image(join(output_dir, roi_filename), roi, scale=True)
 
     return roi, bground_im, first_frame
 
@@ -340,13 +336,19 @@ def extract_wrapper(input_file, output_dir, config_data, num_frames=None, skip=F
     config_data (dict): dictionary containing extraction parameters.
     num_frames (int): number of frames to extract.
     skip (bool): indicates whether to skip file if already extracted
-    extract (function): extraction function state
 
     Returns:
     output_dir (str): path to directory containing extraction
     """
+    # TODO: place config data into dataclasses here or above (probably here)
     print("Processing:", input_file)
     # get the basic metadata
+
+    # filter for mouse processing parameters
+    filtered_params = keyfilter(
+        lambda k: k in MouseProcessing.__dataclass_fields__, config_data
+    )
+    mouse_proc_params = MouseProcessing(**filtered_params)
 
     # ensure 'get_cmd' and 'run_cmd' are not in config_data or get_bground_im_file will fail
     config_data = {
@@ -485,6 +487,7 @@ def extract_wrapper(input_file, output_dir, config_data, num_frames=None, skip=F
             scalars=scalars,
             str_els=str_els,
             output_mov_path=movie_filename,
+            mouse_proc_params=mouse_proc_params,
         )
 
     print()

@@ -8,9 +8,35 @@ import tarfile
 import datetime
 import subprocess
 import numpy as np
+import matplotlib.pyplot as plt
 from os.path import exists
 from tqdm.auto import tqdm
-import matplotlib.pyplot as plt
+from contextlib import contextmanager
+from typing import BinaryIO, Generator
+
+@contextmanager
+def _open_raw_source(src: str | tarfile.TarFile) -> Generator[tuple[BinaryIO, int]]:
+    """
+    Context‐manager for opening a raw source (either a path to a .dat file or a tarfile).
+    Yields:
+      f: file‐like object opened for reading raw bytes
+      size: total size in bytes of that source
+    Automatically closes the file on exit.
+    """
+    f = None
+    try:
+        if isinstance(src, tarfile.TarFile):
+            # find the depth.dat member
+            member = next(m for m in src.getmembers() if m.name.endswith("depth.dat"))
+            f = src.extractfile(member)
+            size = member.size
+        else:
+            f = open(src, "rb")
+            size = os.stat(src).st_size
+        yield f, size
+    finally:
+        if f is not None:
+            f.close()
 
 
 def get_raw_info(filename, bit_depth=16, frame_size=(512, 424)):
@@ -28,23 +54,14 @@ def get_raw_info(filename, bit_depth=16, frame_size=(512, 424)):
 
     bytes_per_frame = (frame_size[0] * frame_size[1] * bit_depth) / 8
 
-    if type(filename) is not tarfile.TarFile:
+    with _open_raw_source(filename) as (_, size):
         file_info = {
-            "bytes": os.stat(filename).st_size,
-            "nframes": int(os.stat(filename).st_size / bytes_per_frame),
+            "bytes": size,
+            "nframes": int(size / bytes_per_frame),
             "dims": frame_size,
             "bytes_per_frame": bytes_per_frame,
         }
-    else:
-        tar_members = filename.getmembers()
-        tar_names = [_.name for _ in tar_members]
-        input_file = tar_members[tar_names.index("depth.dat")]
-        file_info = {
-            "bytes": input_file.size,
-            "nframes": int(input_file.size / bytes_per_frame),
-            "dims": frame_size,
-            "bytes_per_frame": bytes_per_frame,
-        }
+
     return file_info
 
 
@@ -75,9 +92,9 @@ def read_frames_raw(
     if vid_info["dims"] != frame_size:
         frame_size = vid_info["dims"]
 
-    if type(frames) is int:
+    if isinstance(frames, int):
         frames = [frames]
-    elif not frames or (type(frames) is range) and len(frames) == 0:
+    elif not frames or isinstance(frames, range) and len(frames) == 0:
         frames = range(0, vid_info["nframes"])
 
     seek_point = np.maximum(0, frames[0] * vid_info["bytes_per_frame"])
@@ -85,7 +102,7 @@ def read_frames_raw(
 
     dims = (len(frames), frame_size[1], frame_size[0])
 
-    if type(filename) is tarfile.TarFile:
+    if isinstance(filename, tarfile.TarFile):
         tar_members = filename.getmembers()
         tar_names = [_.name for _ in tar_members]
         input_file = tar_members[tar_names.index("depth.dat")]
@@ -208,9 +225,9 @@ def write_frames(
 
     # we probably want to include a warning about multiples of 32 for videos
     # (then we can use pyav and some speedier tools)
-    if not frame_size and type(frames) is np.ndarray:
+    if not frame_size and isinstance(frames, np.ndarray):
         frame_size = "{0:d}x{1:d}".format(frames.shape[2], frames.shape[1])
-    elif not frame_size and type(frames) is tuple:
+    elif not frame_size and isinstance(frames, tuple):
         frame_size = "{0:d}x{1:d}".format(frames[0], frames[1])
 
     command = [
@@ -514,9 +531,9 @@ def write_frames_preview(
     if not np.mod(frames.shape[2], 2) == 0:
         frames = np.pad(frames, ((0, 0), (0, 0), (0, 1)), "constant", constant_values=0)
 
-    if not frame_size and type(frames) is np.ndarray:
+    if not frame_size and isinstance(frames, np.ndarray):
         frame_size = "{0:d}x{1:d}".format(frames.shape[2], frames.shape[1])
-    elif not frame_size and type(frames) is tuple:
+    elif not frame_size and isinstance(frames, tuple):
         frame_size = "{0:d}x{1:d}".format(frames[0], frames[1])
 
     command = [
@@ -609,10 +626,10 @@ def load_movie_data(
     frame_data (numpy.ndarray): Read video as numpy array. (nframes, nrows, ncols)
     """
 
-    if type(frames) is int:
+    if isinstance(frames, int):
         frames = [frames]
     try:
-        if type(filename) is tarfile.TarFile:
+        if isinstance(frames, tarfile.TarFile):
             frame_data = read_frames_raw(
                 filename,
                 frames=frames,
@@ -664,7 +681,7 @@ def get_movie_info(
     """
 
     try:
-        if type(filename) is tarfile.TarFile:
+        if isinstance(filename, tarfile.TarFile):
             metadata = get_raw_info(
                 filename, frame_size=frame_size, bit_depth=bit_depth
             )

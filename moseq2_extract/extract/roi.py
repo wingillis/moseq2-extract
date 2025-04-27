@@ -122,4 +122,4 @@ def plane_ransac(
     coords = np.vstack((xx.ravel(), yy.ravel(), depth_image.ravel())).T
     dist = np.abs(np.dot(coords, best_plane[:3]) + best_plane[3])
 
-    return best_plane, dist
+    return best_plane, dist.reshape(depth_image.shape)

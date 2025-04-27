@@ -24,7 +24,6 @@ from moseq2_extract.util import (
     make_gradient,
     convert_raw_to_avi_function,
     recursive_find_h5s,
-    clean_file_str,
     load_textdata,
     build_path,
     read_yaml,
@@ -101,13 +100,6 @@ class TestExtractUtils(TestCase):
             truth_dict = yaml.safe_load(f)
 
         assert truth_dict == test_dict
-
-    def test_clean_file_str(self):
-        test_name = 'd<a:t\\t"a'
-        truth_out = "d-a-t-t-a"
-
-        test_out = clean_file_str(test_name)
-        assert truth_out == test_out
 
     def test_load_textdata(self):
         data_file = "data/depth_ts.txt"

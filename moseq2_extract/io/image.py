@@ -109,9 +109,9 @@ def read_image(filename, scale=True, scale_key="scale_factor"):
             except ValueError:
                 scale_factor = ast.literal_eval(image_desc[scale_key])
 
-            if type(scale_factor) is int:
+            if isinstance(scale_factor, int):
                 image = image / scale_factor
-            elif type(scale_factor) is tuple:
+            elif isinstance(scale_factor, tuple):
                 iinfo = np.iinfo(image.dtype)
                 image = image.astype("float32") / iinfo.max
                 image = image * (scale_factor[1] - scale_factor[0]) + scale_factor[0]

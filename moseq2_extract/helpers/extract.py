@@ -12,6 +12,7 @@ from tqdm.auto import tqdm
 from moseq2_extract.util import read_yaml
 from moseq2_extract.extract.extract import extract_chunk
 from moseq2_extract.helpers.data import check_completion_status
+from moseq2_extract.helpers.parameters import MouseProcessing
 from moseq2_extract.io.video import load_movie_data, write_frames_preview
 
 
@@ -82,13 +83,13 @@ def set_tracking_model_parameters(
     return results, tracking_init_mean, tracking_init_cov
 
 
-def make_output_movie(results, config_data, offset=0):
+def make_output_movie(results, crop_size: tuple[int, int], offset=0):
     """
     Create an array for output movie with filtered video and cropped mouse on the top left
 
     Args:
     results (dict): dict of extracted depth frames, and original raw chunk to create an output movie.
-    config_data (dict): dict of extraction parameters containing the crop sizes used in the extraction.
+    crop_size (tuple): size of the cropped mouse image to be added to the top left of the mouse video.
     offset (int): current offset being used, automatically set if chunk_overlap > 0
 
     Returns:
@@ -100,17 +101,17 @@ def make_output_movie(results, config_data, offset=0):
     output_movie = np.zeros(
         (
             nframes,
-            rows + config_data["crop_size"][0],
-            cols + config_data["crop_size"][1],
+            rows + crop_size[0],
+            cols + crop_size[1],
         ),
         "uint16",
     )
 
     # Populating array with filtered and cropped videos
-    output_movie[:, : config_data["crop_size"][0], : config_data["crop_size"][1]] = (
+    output_movie[:, :crop_size[0], :crop_size[1]] = (
         results["depth_frames"][offset:]
     )
-    output_movie[:, config_data["crop_size"][0] :, config_data["crop_size"][1] :] = (
+    output_movie[:, crop_size[0]:, crop_size[1]:] = (
         results["chunk"][offset:]
     )
 
@@ -128,6 +129,7 @@ def process_extract_batches(
     scalars=None,
     h5_file=None,
     video_pipe=None,
+    mouse_proc_params: MouseProcessing = None,
     **kwargs,
 ):
     """
@@ -168,9 +170,10 @@ def process_extract_batches(
             bground=bground_im,
             tracking_init_mean=tracking_init_mean,
             tracking_init_cov=tracking_init_cov,
+            mouse_proc_params=mouse_proc_params,
         )
 
-        if config_data["use_tracking_model"]:
+        if mouse_proc_params.use_tracking_model:
             # threshold and clip mask frames from EM tracking results
             results, tracking_init_mean, tracking_init_cov = (
                 set_tracking_model_parameters(results, **config_data)
@@ -185,7 +188,7 @@ def process_extract_batches(
             )
 
         # Create array for output movie with filtered video and cropped mouse on the top left
-        output_movie = make_output_movie(results, config_data, offset)
+        output_movie = make_output_movie(results, mouse_proc_params.crop_size, offset)
 
         # Writing frame batch to mp4 file
         video_pipe = write_frames_preview(
@@ -195,8 +198,8 @@ def process_extract_batches(
             close_pipe=False,
             fps=config_data["fps"],
             frame_range=list(frame_range),
-            depth_max=config_data["max_height"],
-            depth_min=config_data["min_height"],
+            depth_max=mouse_proc_params.max_height,
+            depth_min=mouse_proc_params.min_height,
             progress_bar=config_data.get("progress_bar", False),
         )
 

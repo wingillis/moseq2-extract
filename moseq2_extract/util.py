@@ -247,7 +247,7 @@ def detect_and_set_camera_parameters(config_data, input_file=None):
         },
     }
 
-    if type(input_file) is tarfile.TarFile:
+    if isinstance(input_file, tarfile.TarFile):
         detected = 'kinect'
     elif camera_type == 'auto' and input_file is not None:
         if input_file.endswith('.dat'):
@@ -615,23 +615,6 @@ def recursive_find_h5s(root_dir=Path.cwd(),
     return valid_h5s, dicts, yamls
 
 
-def clean_file_str(file_str: str, replace_with: str = '-') -> str:
-    """
-    Removes invalid characters for a file name from a string.
-
-    Args:
-    file_str (str): filename substring to replace
-    replace_with (str): value to replace str with
-
-    Returns:
-    out (str): cleaned file string
-    """
-
-    out = re.sub(r'[ <>:"/\\|?*\']', replace_with, file_str)
-    # find any occurrences of `replace_with`, i.e. (--)
-    return re.sub(replace_with * 2, replace_with, out)
-
-
 def load_textdata(data_file, dtype=np.float32):
     """
     Loads timestamp from txt/csv file.
@@ -684,7 +667,11 @@ def build_path(keys: dict, format_string: str, snake_case=True) -> str:
     if snake_case:
         keys = valmap(camel_to_snake, keys)
 
-    return clean_file_str(format_string.format(**keys))
+    formatted = format_string.format(**keys)
+    # remove invalid characters for a file name
+    formatted = re.sub(r'[ <>:"/\\|?*\']', '-', formatted).replace('--', '-')
+    return formatted
+
 
 def read_yaml(yaml_file):
     """
@@ -792,7 +779,7 @@ def camel_to_snake(s: str) -> str:
     """
     return _underscorer.sub('_', s).lower()
 
-def recursive_find_unextracted_dirs(root_dir=os.getcwd(),
+def recursive_find_unextracted_dirs(root_dir: Path = Path.cwd(),
                                     session_pattern=r'session_\d+\.(?:tgz|tar\.gz)',
                                     extension='.dat',
                                     yaml_path='proc/results_00.yaml',
