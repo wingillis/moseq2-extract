@@ -13,7 +13,7 @@ from moseq2_extract.util import read_yaml
 from moseq2_extract.extract.extract import extract_chunk
 from moseq2_extract.helpers.data import check_completion_status
 from moseq2_extract.helpers.parameters import MouseProcessing
-from moseq2_extract.io.video import load_movie_data, write_frames_preview
+from moseq2_extract.io.video import load_movie_data, write_frames_preview, open_video_writer
 
 
 def write_extracted_chunk_to_h5(
@@ -154,58 +154,49 @@ def process_extract_batches(
     tracking_init_mean = config_data.pop("tracking_init_mean", None)
     tracking_init_cov = config_data.pop("tracking_init_cov", None)
 
-    for i, frame_range in enumerate(tqdm(frame_batches, desc="Processing batches")):
-        raw_chunk = load_movie_data(
-            input_file, frame_range, frame_size=bground_im.shape[::-1], **config_data
-        )
-
-        offset = config_data["chunk_overlap"] if i > 0 else 0
-
-        # Get crop-rotated frame batch
-        results = extract_chunk(
-            **config_data,
-            **str_els,
-            chunk=raw_chunk,
-            roi=roi,
-            bground=bground_im,
-            tracking_init_mean=tracking_init_mean,
-            tracking_init_cov=tracking_init_cov,
-            mouse_proc_params=mouse_proc_params,
-        )
-
-        if mouse_proc_params.use_tracking_model:
-            # threshold and clip mask frames from EM tracking results
-            results, tracking_init_mean, tracking_init_cov = (
-                set_tracking_model_parameters(results, **config_data)
+    with open_video_writer(
+        output_mov_path,
+        config_data["fps"],
+        mouse_proc_params.min_height,
+        mouse_proc_params.max_height,
+    ) as preview_writer:
+        for i, frame_range in enumerate(tqdm(frame_batches, desc="Processing batches")):
+            raw_chunk = load_movie_data(
+                input_file, frame_range, frame_size=bground_im.shape[::-1], **config_data
             )
 
-        # Offsetting frame chunk by CLI parameter defined option: chunk_overlap
-        frame_range = frame_range[offset:]
+            offset = config_data["chunk_overlap"] if i > 0 else 0
 
-        if h5_file is not None:
-            write_extracted_chunk_to_h5(
-                h5_file, results, config_data, scalars, frame_range, offset
+            # Get crop-rotated frame batch
+            results = extract_chunk(
+                **config_data,
+                **str_els,
+                chunk=raw_chunk,
+                roi=roi,
+                bground=bground_im,
+                tracking_init_mean=tracking_init_mean,
+                tracking_init_cov=tracking_init_cov,
+                mouse_proc_params=mouse_proc_params,
             )
 
-        # Create array for output movie with filtered video and cropped mouse on the top left
-        output_movie = make_output_movie(results, mouse_proc_params.crop_size, offset)
+            if mouse_proc_params.use_tracking_model:
+                # threshold and clip mask frames from EM tracking results
+                results, tracking_init_mean, tracking_init_cov = (
+                    set_tracking_model_parameters(results, **config_data)
+                )
 
-        # Writing frame batch to mp4 file
-        video_pipe = write_frames_preview(
-            output_mov_path,
-            output_movie,
-            pipe=video_pipe,
-            close_pipe=False,
-            fps=config_data["fps"],
-            frame_range=list(frame_range),
-            depth_max=mouse_proc_params.max_height,
-            depth_min=mouse_proc_params.min_height,
-            progress_bar=config_data.get("progress_bar", False),
-        )
+            # Offsetting frame chunk by CLI parameter defined option: chunk_overlap
+            frame_range = frame_range[offset:]
 
-    # Check if video is done writing. If not, wait.
-    if video_pipe is not None:
-        video_pipe.communicate()
+            if h5_file is not None:
+                write_extracted_chunk_to_h5(
+                    h5_file, results, config_data, scalars, frame_range, offset
+                )
+
+            # Create array for output movie with filtered video and cropped mouse on the top left
+            output_movie = make_output_movie(results, mouse_proc_params.crop_size, offset)
+
+            write_frames_preview(output_movie, preview_writer, frame_range=frame_range)
 
 
 def run_local_extract(to_extract, config_file, skip_extracted=False):

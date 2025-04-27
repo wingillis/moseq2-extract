@@ -27,6 +27,7 @@ dependencies = [
     "ruamel-yaml>=0.18.10",
     "tifffile>=2025.3.30",
     "toml>=0.10.2",
+    "imageio[ffmpeg,pyav]>=2.37.0",
 ]
 
 [project.optional-dependencies]

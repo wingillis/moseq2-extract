@@ -8,6 +8,7 @@ import tarfile
 import datetime
 import subprocess
 import numpy as np
+import imageio.v3 as iio
 import matplotlib.pyplot as plt
 from os.path import exists
 from tqdm.auto import tqdm
@@ -476,137 +477,60 @@ def read_mkv(
     )
 
 
-def write_frames_preview(
-    filename,
-    frames=np.empty((0,)),
-    threads=6,
-    fps=30,
-    pixel_format="rgb24",
-    codec="h264",
-    slices=24,
-    slicecrc=1,
-    frame_size=None,
-    depth_min=0,
-    depth_max=80,
-    get_cmd=False,
-    cmap="jet",
-    pipe=None,
-    close_pipe=True,
-    frame_range=None,
-    progress_bar=False,
-):
+@contextmanager
+def open_video_writer(filename, fps, depth_min, depth_max, cmap="jet"):
     """
-    Simple command to pipe frames to an ffv1 file. Writes out a false-colored mp4 video.
+    Context‐manager for opening a video writer.
+    Yields:
+      writer: function that writes frames to the video file
+    Automatically closes the file on exit.
+    """
+    writer = iio.imopen(filename, "w", plugin="pyav")
+    writer.init_video_stream(codec="libx264", fps=fps, pixel_format="yuv420p")
+    writer._video_stream.options = {"preset": "medium", "crf": "25"}
+
+    cmap = plt.get_cmap(cmap)
+    font = cv2.FONT_HERSHEY_SIMPLEX
+    white = (255, 255, 255)
+
+    def write_frame(frame, frame_num):
+        txt_pos = (5, frame.shape[-1] - 40)
+
+        frame = frame.astype("float32")
+        frame = np.clip((frame - depth_min) / (depth_max - depth_min), 0, 1)
+        frame = np.uint8(cmap(frame)[..., :3] * 255)
+
+        frame_num_str = str(frame_num)
+        try:
+            cv2.putText(frame, frame_num_str, txt_pos, font, 1, white, 2, cv2.LINE_AA)
+        except (IndexError, ValueError):
+            # len(frame_range) M < len(frames) or txt_pos is outside of the frame dimensions
+            print("Could not overlay frame number on preview on video.")
+
+        writer.write_frame(frame)
+
+    try:
+        yield write_frame
+    finally:
+        writer.close()
+
+def write_frames_preview(frames, write_fun: callable, frame_range=None):
+    """
+    Writes out a mp4 video where color represents height off the floor.
 
     Args:
     filename (str): path to file to write to.
     frames (np.ndarray): frames to write
-    threads (int): number of threads to write video
     fps (int): frames per second
-    pixel_format (str): format video color scheme
-    codec (str): ffmpeg encoding-writer method to use
-    slices (int): number of frame slices to write at a time.
-    slicecrc (int): check integrity of slices
-    frame_size (tuple): shape/dimensions of image.
     depth_min (int): minimum mouse depth from floor in (mm)
     depth_max (int): maximum mouse depth from floor in (mm)
-    get_cmd (bool): indicates whether function should return ffmpeg command (instead of executing)
     cmap (str): color map to use.
-    pipe (subProcess.Pipe): pipe to currently open video file.
-    close_pipe (bool): indicates to close the open pipe to video when done writing.
     frame_range (range()): frame indices to write on video
     progress_bar (bool): If True, displays a TQDM progress bar for the video writing progress.
-
-    Returns:
-    pipe (subProcess.Pipe): indicates whether video writing is complete.
     """
-
-    font = cv2.FONT_HERSHEY_SIMPLEX
-    white = (255, 255, 255)
-    txt_pos = (5, frames.shape[-1] - 40)
-
-    if not np.mod(frames.shape[1], 2) == 0:
-        frames = np.pad(frames, ((0, 0), (0, 1), (0, 0)), "constant", constant_values=0)
-
-    if not np.mod(frames.shape[2], 2) == 0:
-        frames = np.pad(frames, ((0, 0), (0, 0), (0, 1)), "constant", constant_values=0)
-
-    if not frame_size and isinstance(frames, np.ndarray):
-        frame_size = "{0:d}x{1:d}".format(frames.shape[2], frames.shape[1])
-    elif not frame_size and isinstance(frames, tuple):
-        frame_size = "{0:d}x{1:d}".format(frames[0], frames[1])
-
-    command = [
-        "ffmpeg",
-        "-y",
-        "-loglevel",
-        "fatal",
-        "-threads",
-        str(threads),
-        "-framerate",
-        str(fps),
-        "-f",
-        "rawvideo",
-        "-s",
-        frame_size,
-        "-pix_fmt",
-        pixel_format,
-        "-i",
-        "-",
-        "-an",
-        "-vcodec",
-        codec,
-        "-slices",
-        str(slices),
-        "-slicecrc",
-        str(slicecrc),
-        "-r",
-        str(fps),
-        filename,
-    ]
-
-    if get_cmd:
-        return command
-
-    if not pipe:
-        pipe = subprocess.Popen(command, stdin=subprocess.PIPE, stderr=subprocess.PIPE)
-
-    # scale frames to appropriate depth ranges
-    use_cmap = plt.get_cmap(cmap)
-    for i in tqdm(
-        range(frames.shape[0]),
-        disable=not progress_bar,
-        desc=f"Writing frames to {filename}",
-    ):
-        disp_img = frames[i, :].copy().astype("float32")
-        disp_img = (disp_img - depth_min) / (depth_max - depth_min)
-        disp_img[disp_img < 0] = 0
-        disp_img[disp_img > 1] = 1
-        disp_img = np.delete(use_cmap(disp_img), 3, 2) * 255
-        if frame_range is not None:
-            try:
-                cv2.putText(
-                    disp_img,
-                    str(frame_range[i]),
-                    txt_pos,
-                    font,
-                    1,
-                    white,
-                    2,
-                    cv2.LINE_AA,
-                )
-            except (IndexError, ValueError):
-                # len(frame_range) M < len(frames) or
-                # txt_pos is outside of the frame dimensions
-                print("Could not overlay frame number on preview on video.")
-
-        pipe.stdin.write(disp_img.astype("uint8").tostring())
-
-    if close_pipe:
-        pipe.communicate()
-        return None
-    else:
-        return pipe
+    for i, frame in enumerate(frames):
+        frame_num = i if frame_range is None else frame_range[i]
+        write_fun(frame, frame_num)
 
 
 def load_movie_data(
