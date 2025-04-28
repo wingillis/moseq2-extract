@@ -8,7 +8,7 @@ yaml = YAML(typ='safe', pure=True)
 import numpy.testing as npt
 from unittest import TestCase
 from os.path import exists, dirname
-from moseq2_extract.io.image import read_image
+from moseq2_extract.io.image import read_tiff
 from ..integration_tests.test_cli import write_fake_movie
 from moseq2_extract.util import (
     gen_batch_sequence,
@@ -218,8 +218,8 @@ class TestExtractUtils(TestCase):
         os.remove(fpath)
 
     def test_get_bucket_center(self):
-        img = read_image("data/tiffs/bground_bucket.tiff")
-        roi = read_image("data/tiffs/roi_bucket_01.tiff")
+        img = read_tiff("data/tiffs/bground_bucket.tiff")
+        roi = read_tiff("data/tiffs/roi_bucket_01.tiff")
         true_depth = np.median(img[roi > 0])
 
         x, y = get_bucket_center(img, true_depth)
@@ -231,7 +231,7 @@ class TestExtractUtils(TestCase):
         assert y > 0 and y < img.shape[0]
 
     def test_make_gradient(self):
-        img = read_image("data/tiffs/bground_bucket.tiff")
+        img = read_tiff("data/tiffs/bground_bucket.tiff")
         width = img.shape[1]
         height = img.shape[0]
         xc = int(img.shape[1] / 2)

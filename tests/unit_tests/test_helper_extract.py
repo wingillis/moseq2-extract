@@ -8,7 +8,7 @@ from copy import deepcopy
 from ruamel.yaml import YAML
 yaml = YAML(typ='safe', pure=True)
 from unittest import TestCase
-from moseq2_extract.io.image import read_image
+from moseq2_extract.io.image import read_tiff
 from moseq2_extract.helpers.data import create_extract_h5
 from ..integration_tests.test_cli import write_fake_movie
 from moseq2_extract.gui import generate_config_command, download_flip_command
@@ -59,10 +59,10 @@ class TestHelperExtract(TestCase):
         metadata_path = "data/metadata.json"
         output_filename = "test_out"
 
-        bground_im = read_image(
+        bground_im = read_tiff(
             os.path.join(output_dir, "tiffs/", "bground_bucket.tiff"), scale=True
         )
-        roi = read_image(
+        roi = read_tiff(
             os.path.join(output_dir, "tiffs/", "roi_bucket_01.tiff"), scale=True
         )
         first_frame = np.zeros(roi.shape)

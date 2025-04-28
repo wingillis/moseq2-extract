@@ -14,9 +14,10 @@ from pathlib import Path
 from ruamel.yaml import YAML
 from datetime import datetime
 from cytoolz import valmap, concat
-from moseq2_extract.io.image import write_image
+from moseq2_extract.io.image import write_tiff
 from ruamel.yaml.error import UnsafeLoaderWarning
 from moseq2_extract.io.video import get_movie_info
+from moseq2_extract.helpers.parameters import MouseProcessing
 from os.path import join, exists, splitext, basename, dirname
 
 
@@ -83,7 +84,7 @@ def set_bground_to_plane_fit(bground_im, plane, output_dir):
     plane_im = (np.dot(coords.T, plane[:2]) + plane[3]) / -plane[2]
     plane_im = plane_im.reshape(bground_im.shape)
 
-    write_image(join(output_dir, 'bground.tiff'), plane_im, scale=True)
+    write_tiff(join(output_dir, 'bground.tiff'), plane_im, scale=True)
 
     return plane_im
 
@@ -134,6 +135,7 @@ def gen_batch_sequence(nframes, chunk_size, overlap, offset=0):
     for i in range(0, len(seq) - overlap, chunk_size - overlap):
         out.append(seq[i:i + chunk_size])
     return out
+
 
 def load_timestamps(timestamp_file, col=0, alternate=False):
     """
@@ -276,27 +278,6 @@ def detect_and_set_camera_parameters(config_data, input_file=None):
 
     return config_data
 
-def check_filter_sizes(config_data):
-    """
-    Ensure spatial and temporal filter kernel sizes are odd numbers.
-
-    Args:
-    config_data (dict): a dictionary holding all extraction parameters
-
-    Returns:
-    config_data (dict): Updated configuration dict
-
-    """
-
-    # Ensure filter kernel sizes are odd
-    if config_data['spatial_filter_size'][0] % 2 == 0 and config_data['spatial_filter_size'][0] > 0:
-        warnings.warn("Spatial Filter Size must be an odd number. Incrementing value by 1.")
-        config_data['spatial_filter_size'][0] += 1
-    if config_data['temporal_filter_size'][0] % 2 == 0 and config_data['temporal_filter_size'][0] > 0:
-        config_data['temporal_filter_size'][0] += 1
-        warnings.warn("Spatial Filter Size must be an odd number. Incrementing value by 1.")
-
-    return config_data
 
 def generate_missing_metadata(sess_dir, sess_name):
     """
@@ -358,26 +339,6 @@ def load_found_session_paths(input_dir: str | Path, exts: list[str] | str) -> li
 
     return sorted(concat(input_dir.glob('**/*' + ext) for ext in exts))
 
-def get_strels(config_data):
-    """
-    Get dictionary object of cv2 StructuringElements for image filtering given
-    a dict of configurations parameters.
-
-    Args:
-    config_data (dict): dict containing cv2 Structuring Element parameters
-
-    Returns:
-    str_els (dict): dict containing cv2 StructuringElements used for image filtering
-    """
-
-    str_els = {
-        'strel_dilate': select_strel(config_data['bg_roi_shape'], tuple(config_data['bg_roi_dilate'])),
-        'strel_erode': select_strel(config_data['bg_roi_shape'], tuple(config_data['bg_roi_erode'])),
-        'strel_tail': select_strel(config_data['tail_filter_shape'], tuple(config_data['tail_filter_size'])),
-        'strel_min': select_strel(config_data['cable_filter_shape'], tuple(config_data['cable_filter_size']))
-    }
-
-    return str_els
 
 def select_strel(string='e', size=(10, 10)):
     """

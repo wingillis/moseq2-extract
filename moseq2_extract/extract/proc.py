@@ -10,14 +10,14 @@ import numpy as np
 import scipy.signal
 import skimage.measure
 import scipy.interpolate
+from pathlib import Path
 from copy import deepcopy
 from tqdm.auto import tqdm
-import moseq2_extract.io.video
-from os.path import exists, join, dirname
 from moseq2_extract.extract.roi import plane_ransac
-from moseq2_extract.io.image import read_image, write_image
+from moseq2_extract.io.image import read_tiff, write_tiff
 from moseq2_extract.util import convert_pxs_to_mm, strided_app
 from moseq2_extract.helpers.parameters import MouseProcessing, ArenaParams
+from moseq2_extract.io.video import read_avi_frame_indices, load_movie_data, get_movie_info
 
 
 def get_flips(frames, flip_file=None, smoothing=None):
@@ -86,7 +86,7 @@ def get_largest_cc(frames, progress_bar=False):
     return foreground_obj
 
 
-def get_bground_im_file(frames_file, frame_stride=250, med_scale=5, output_dir=None, **kwargs):
+def get_bground_im_file(frames_file: str | Path, frame_stride=250, med_scale=5, output_dir=None, **kwargs):
     """
     Load or compute background from file.
 
@@ -99,30 +99,30 @@ def get_bground_im_file(frames_file, frame_stride=250, med_scale=5, output_dir=N
     Returns:
     bground (numpy.ndarray): background image
     """
+    frames_file = Path(frames_file)
 
     if output_dir is None:
-        bground_path = join(dirname(frames_file), 'proc', 'bground.tiff')
-    else:
-        bground_path = join(output_dir, 'bground.tiff')
+        output_dir = frames_file.parent / 'proc'
+    
+    bground_path = Path(output_dir) / 'bground.tiff'
 
     if not isinstance(frames_file, tarfile.TarFile):
         kwargs = deepcopy(kwargs)
-    finfo = kwargs.pop('finfo', None)
 
     # Compute background image if it doesn't exist. Otherwise, load from file
-    if not exists(bground_path) or kwargs.get('recompute_bg', False):
-        if finfo is None:
-            finfo = moseq2_extract.io.video.get_movie_info(frames_file, **kwargs)
+    if not bground_path.exists() or kwargs.get('recompute_bg', False):
+        if (finfo := kwargs.pop("finfo", None)) is None:
+            finfo = get_movie_info(frames_file, **kwargs)
 
         frame_idx = np.arange(0, finfo['nframes'], frame_stride)
         frame_store = []
-        for i, frame in enumerate(frame_idx):
-            frs = moseq2_extract.io.video.load_movie_data(frames_file,
-                                                          [int(frame)], 
-                                                          frame_size=finfo['dims'], 
-                                                          finfo=finfo, 
-                                                          **kwargs).squeeze()
-            frame_store.append(cv2.medianBlur(frs, med_scale))
+        if frames_file.suffix == ".avi":
+            frame_store = [cv2.medianBlur(frame, med_scale) for frame in read_avi_frame_indices(frames_file, frame_idx)]
+        else:
+            for i, frame in enumerate(frame_idx):
+                frs = load_movie_data(frames_file, [int(frame)], frame_size=finfo['dims'], 
+                                                            finfo=finfo, **kwargs).squeeze()
+                frame_store.append(cv2.medianBlur(frs, med_scale))
         
         frame_store = np.array(frame_store).astype('float32')
 
@@ -149,9 +149,9 @@ def get_bground_im_file(frames_file, frame_stride=250, med_scale=5, output_dir=N
         # add zeros back
         bground = np.nan_to_num(bground)
 
-        write_image(bground_path, bground, scale=True)
+        write_tiff(bground_path, bground, scale=True)
     else:
-        bground = read_image(bground_path, scale=True)
+        bground = read_tiff(bground_path, scale=True)
         
     return bground
 
@@ -218,6 +218,8 @@ def get_roi(depth_image,
         ranks (list): list of ROI ranks.
         shape_index (list): list of rank means.
     """
+
+    mask = None
 
     if arena_params.bg_roi_gradient_filter:
         gradient_x = np.abs(cv2.Sobel(depth_image, cv2.CV_64F,
@@ -347,9 +349,7 @@ def im_moment_features(IM):
 
 
 def clean_frames(frames, mouse_proc_params: MouseProcessing,
-                 strel_tail=cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (7, 7)),
                  frame_dtype='uint8',
-                 strel_min=cv2.getStructuringElement(cv2.MORPH_RECT, (5, 5)),
                  iters_min=None, progress_bar=False):
     """
     Simple temporal and/or spatial filtering, median filter and morphological opening.
@@ -368,17 +368,17 @@ def clean_frames(frames, mouse_proc_params: MouseProcessing,
     """
     filtered_frames = frames.copy().astype(frame_dtype)
 
-    for i in tqdm(len(frames), disable=not progress_bar, desc='Cleaning frames'):
+    for i in tqdm(range(len(frames)), disable=not progress_bar, desc='Cleaning frames'):
         # Erode Frames
         if iters_min is not None and iters_min > 0:
-            filtered_frames[i] = cv2.erode(filtered_frames[i], strel_min, iters_min)
+            filtered_frames[i] = cv2.erode(filtered_frames[i], mouse_proc_params.strel_min, iters_min)
         # Median Blur
         if mouse_proc_params.spatial_filter_size is not None and np.all(np.array(mouse_proc_params.spatial_filter_size) > 0):
             for size in mouse_proc_params.spatial_filter_size:
                 filtered_frames[i] = cv2.medianBlur(filtered_frames[i], size)
         # Tail Filter
         if mouse_proc_params.tail_filter_iters is not None and mouse_proc_params.tail_filter_iters > 0:
-            filtered_frames[i] = cv2.morphologyEx(filtered_frames[i], cv2.MORPH_OPEN, strel_tail, mouse_proc_params.tail_filter_iters)
+            filtered_frames[i] = cv2.morphologyEx(filtered_frames[i], cv2.MORPH_OPEN, mouse_proc_params.strel_tail, mouse_proc_params.tail_filter_iters)
 
     # Temporal Median Filter
     if mouse_proc_params.temporal_filter_size is not None and np.all(np.array(mouse_proc_params.temporal_filter_size) > 0):

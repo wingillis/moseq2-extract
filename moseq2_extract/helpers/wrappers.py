@@ -15,9 +15,9 @@ from copy import deepcopy
 from ruamel.yaml import YAML
 yaml = YAML(typ='safe', pure=True)
 from tqdm.auto import tqdm
-from cytoolz import partial, keyfilter
+from cytoolz import partial, keyfilter, dissoc
 from moseq2_extract.helpers.parameters import MouseProcessing, ArenaParams
-from moseq2_extract.io.image import write_image
+from moseq2_extract.io.image import write_tiff
 from moseq2_extract.helpers.extract import process_extract_batches
 from moseq2_extract.extract.proc import get_roi, get_bground_im_file
 from os.path import join, exists, dirname, basename, abspath, splitext
@@ -43,8 +43,6 @@ from moseq2_extract.util import (
     h5_to_dict,
     detect_and_set_camera_parameters,
     get_frame_range_indices,
-    check_filter_sizes,
-    get_strels,
     SCALAR_ATTRIBUTES,
 )
 
@@ -241,6 +239,7 @@ def get_roi_wrapper(input_file, config_data, output_dir=None):
         lambda k: k in ArenaParams.__dataclass_fields__, config_data
     )
     arena_params = ArenaParams(**filtered_params)
+    config_data = dissoc(config_data, *filtered_params.keys())
 
     if output_dir is None:
         output_dir = join(dirname(input_file), "proc")
@@ -261,7 +260,7 @@ def get_roi_wrapper(input_file, config_data, output_dir=None):
 
     print("Getting background...")
     bground_im = get_bground_im_file(input_file, **config_data)
-    write_image(join(output_dir, "bground.tiff"), bground_im, scale=True)
+    write_tiff(join(output_dir, "bground.tiff"), bground_im, scale=True)
 
     # readjust depth range
     if not config_data.get("manual_set_depth_range", False):
@@ -287,7 +286,7 @@ def get_roi_wrapper(input_file, config_data, output_dir=None):
     first_frame = load_movie_data(
         input_file, 0, frame_size=config_data["finfo"]["dims"], **config_data
     )  # there is a tar object flag that must be set!!
-    write_image(
+    write_tiff(
         join(output_dir, "first_frame.tiff"),
         first_frame,
         scale=True,
@@ -321,7 +320,7 @@ def get_roi_wrapper(input_file, config_data, output_dir=None):
     roi = rois[arena_params.bg_roi_index]
 
     roi_filename = f"roi_{arena_params.bg_roi_index:02d}.tiff"
-    write_image(join(output_dir, roi_filename), roi, scale=True)
+    write_tiff(join(output_dir, roi_filename), roi, scale=True)
 
     return roi, bground_im, first_frame
 
@@ -349,13 +348,10 @@ def extract_wrapper(input_file, output_dir, config_data, num_frames=None, skip=F
         lambda k: k in MouseProcessing.__dataclass_fields__, config_data
     )
     mouse_proc_params = MouseProcessing(**filtered_params)
+    config_data = dissoc(config_data, *filtered_params.keys())
 
     # ensure 'get_cmd' and 'run_cmd' are not in config_data or get_bground_im_file will fail
-    config_data = {
-        k: v
-        for k, v in config_data.items()
-        if k not in ("get_cmd", "run_cmd", "extensions")
-    }
+    config_data = dissoc(config_data, "get_cmd", "run_cmd", "extensions")
 
     status_dict = {
         "complete": False,
@@ -395,8 +391,6 @@ def extract_wrapper(input_file, output_dir, config_data, num_frames=None, skip=F
         nframes = int(config_data["finfo"]["nframes"])
     elif isinstance(num_frames, int):
         nframes = num_frames
-
-    config_data = check_filter_sizes(config_data)
 
     # Compute total number of frames to include from an initial starting point.
     total_frames, first_frame_idx, last_frame_idx = get_frame_range_indices(
@@ -440,9 +434,6 @@ def extract_wrapper(input_file, output_dir, config_data, num_frames=None, skip=F
     with open(status_filename, "w") as f:
         yaml.dump(status_dict, f)
 
-    # Get Structuring Elements for extraction
-    str_els = get_strels(config_data)
-
     # Compute ROIs
     roi, bground_im, first_frame = get_roi_wrapper(
         input_file, config_data, output_dir=output_dir
@@ -476,6 +467,7 @@ def extract_wrapper(input_file, output_dir, config_data, num_frames=None, skip=F
             config_data=config_data,
             status_dict=status_dict,
             scalars_attrs=SCALAR_ATTRIBUTES,
+            mouse_proc_params=mouse_proc_params,
         )
 
         # Write crop-rotated results to h5 file and write video preview mp4 file
@@ -485,7 +477,6 @@ def extract_wrapper(input_file, output_dir, config_data, num_frames=None, skip=F
             input_file=input_file,
             config_data=config_data,
             scalars=scalars,
-            str_els=str_els,
             output_mov_path=movie_filename,
             mouse_proc_params=mouse_proc_params,
         )

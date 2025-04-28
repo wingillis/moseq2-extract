@@ -1,4 +1,5 @@
 import cv2
+import warnings
 import numpy as np
 from typing import Literal
 from dataclasses import dataclass, field
@@ -54,8 +55,8 @@ class MouseProcessing:
     cable_filter_shape: Literal["ellipse", "rectangle"] = "rectangle"
     cable_filter_size: tuple[int, int] = (5, 5)
 
-    spatial_filter_size: list[int] = [3]
-    temporal_filter_size: list[int] = [0]
+    spatial_filter_size: list[int] = field(default_factory=lambda: [3])
+    temporal_filter_size: list[int] = field(default_factory=lambda: [0])
 
     crop_size: tuple[int, int] = (80, 80)
 
@@ -64,6 +65,39 @@ class MouseProcessing:
 
     flip_classifier: str | None = None
     flip_classifier_smoothing: int = 51
+
+    # Store structuring elements for tail and cable filters post-init
+    strel_tail: np.ndarray = field(init=False)
+    strel_min: np.ndarray = field(init=False)  # for cable
+
+    def __post_init__(self):
+        # Ensure spatial and temporal filter sizes are odd numbers
+        orig_spatial_filter = tuple(self.spatial_filter_size)
+        orig_temporal_filter = tuple(self.temporal_filter_size)
+
+        self.spatial_filter_size = [
+            size if (size % 2 == 1) or (size == 0) else size + 1 for size in self.spatial_filter_size
+        ]
+        self.temporal_filter_size = [
+            size if (size % 2 == 1) or (size == 0) else size + 1 for size in self.temporal_filter_size
+        ]
+        if tuple(self.spatial_filter_size) != orig_spatial_filter:
+            warnings.warn(
+                f"Spatial filter size changed from {orig_spatial_filter} to {self.spatial_filter_size}. Must be odd."
+            )
+        if tuple(self.temporal_filter_size) != orig_temporal_filter:
+            warnings.warn(
+                f"Temporal filter size changed from {orig_temporal_filter} to {self.temporal_filter_size}. Must be odd."
+            )
+        
+        # Create structuring elements for tail and cable filters
+        strel_map = dict(ellipse=cv2.MORPH_ELLIPSE, rectangle=cv2.MORPH_RECT)
+        self.strel_tail = cv2.getStructuringElement(
+            strel_map[self.tail_filter_shape], self.tail_filter_size
+        )
+        self.strel_min = cv2.getStructuringElement(
+            strel_map[self.cable_filter_shape], self.cable_filter_size
+        )
 
 
 @dataclass

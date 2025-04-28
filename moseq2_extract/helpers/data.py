@@ -26,6 +26,7 @@ from moseq2_extract.util import (
     dict_to_h5,
     click_param_annot,
 )
+from moseq2_extract.helpers.parameters import MouseProcessing
 
 
 def check_completion_status(status_filename):
@@ -338,6 +339,7 @@ def create_extract_h5(
     first_frame,
     first_frame_idx,
     last_frame_idx,
+    mouse_proc_params: MouseProcessing,
     **kwargs,
 ):
     """
@@ -379,37 +381,32 @@ def create_extract_h5(
     # Cropped Frames
     h5_file.create_dataset(
         "frames",
-        (nframes, config_data["crop_size"][0], config_data["crop_size"][1]),
+        (nframes, *mouse_proc_params.crop_size),
         config_data["frame_dtype"],
         compression="gzip",
     )
     h5_file["frames"].attrs["description"] = (
         "3D Numpy array of depth frames (nframes x w x h)." + " Depth values are in mm."
     )
+
     # Frame Masks for EM Tracking
-    if config_data["use_tracking_model"]:
-        h5_file.create_dataset(
-            "frames_mask",
-            (nframes, config_data["crop_size"][0], config_data["crop_size"][1]),
-            "float32",
-            compression="gzip",
-        )
-        h5_file["frames_mask"].attrs[
-            "description"
-        ] = "Log-likelihood values from the tracking model (nframes x w x h)"
+    if mouse_proc_params.use_tracking_model:
+        fm_dtype = "float32"
+        desc = "Log-likelihood values from the tracking model (nframes x w x h)"
     else:
-        h5_file.create_dataset(
-            "frames_mask",
-            (nframes, config_data["crop_size"][0], config_data["crop_size"][1]),
-            "bool",
-            compression="gzip",
-        )
-        h5_file["frames_mask"].attrs[
-            "description"
-        ] = "Boolean mask, false=not mouse, true=mouse"
+        fm_dtype = "bool"
+        desc = "Boolean mask, false=not mouse, true=mouse"
+    
+    h5_file.create_dataset(
+        "frames_mask",
+        (nframes, *mouse_proc_params.crop_size),
+        fm_dtype,
+        compression="gzip",
+    )
+    h5_file["frames_mask"].attrs["description"] = desc
 
     # Flip Classifier
-    if config_data["flip_classifier"] is not None:
+    if mouse_proc_params.flip_classifier is not None:
         h5_file.create_dataset(
             "metadata/extraction/flips", (nframes,), "bool", compression="gzip"
         )
@@ -464,8 +461,8 @@ def create_extract_h5(
     ] = "Computed background image"
 
     # Extract Version
-    extract_version = moseq2_extract.__version__
-    h5_file.create_dataset("metadata/extraction/extract_version", data=extract_version)
+    h5_file.create_dataset("metadata/extraction/extract_version",
+                           data=moseq2_extract.__version__)
     h5_file["metadata/extraction/extract_version"].attrs[
         "description"
     ] = "Version of moseq2-extract"

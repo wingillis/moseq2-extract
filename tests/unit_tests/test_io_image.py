@@ -3,7 +3,7 @@ import numpy as np
 import numpy.testing as npt
 from unittest import TestCase
 from skimage.external import tifffile
-from moseq2_extract.io.image import write_image, read_image, read_tiff_files
+from moseq2_extract.io.image import write_tiff, read_tiff, read_tiff_files
 
 
 class TestImageIO(TestCase):
@@ -13,7 +13,7 @@ class TestImageIO(TestCase):
 
         # make some random ints, don't exceed 16 bit limits
         rnd_img = np.random.randint(low=0, high=100, size=(50, 50)).astype("uint16")
-        write_image(data_path, rnd_img, scale=False)
+        write_tiff(data_path, rnd_img, scale=False)
 
         with tifffile.TiffFile(data_path) as tif:
             tmp = tif
@@ -29,18 +29,18 @@ class TestImageIO(TestCase):
 
         rnd_img = np.random.randint(low=0, high=100, size=(50, 50)).astype("uint16")
 
-        write_image(data_path, rnd_img, scale=True)
-        image = read_image(data_path, scale=True)
+        write_tiff(data_path, rnd_img, scale=True)
+        image = read_tiff(data_path, scale=True)
 
         npt.assert_almost_equal(rnd_img, image, 3)
 
-        write_image(data_path, rnd_img, scale=True, scale_factor=(0, 100))
-        image = read_image(data_path, scale=True)
+        write_tiff(data_path, rnd_img, scale=True, scale_factor=(0, 100))
+        image = read_tiff(data_path, scale=True)
 
         npt.assert_almost_equal(rnd_img, image, 3)
 
-        write_image(data_path, rnd_img, scale=False)
-        image = read_image(data_path, scale=False)
+        write_tiff(data_path, rnd_img, scale=False)
+        image = read_tiff(data_path, scale=False)
 
         npt.assert_almost_equal(rnd_img, image, 3)
         os.remove(data_path)

@@ -2,6 +2,7 @@
 Video and video-metadata read/write functions.
 """
 
+import av
 import os
 import cv2
 import tarfile
@@ -12,11 +13,15 @@ import imageio.v3 as iio
 import matplotlib.pyplot as plt
 from os.path import exists
 from tqdm.auto import tqdm
+from itertools import islice
+from pathlib import Path
+from cytoolz import partition_all
+from collections import deque
 from contextlib import contextmanager
-from typing import BinaryIO, Generator
+from typing import BinaryIO, Iterator
 
 @contextmanager
-def _open_raw_source(src: str | tarfile.TarFile) -> Generator[tuple[BinaryIO, int]]:
+def _open_raw_source(src: str | tarfile.TarFile) -> Iterator[tuple[BinaryIO, int]]:
     """
     Context‐manager for opening a raw source (either a path to a .dat file or a tarfile).
     Yields:
@@ -486,7 +491,7 @@ def open_video_writer(filename, fps, depth_min, depth_max, cmap="jet"):
     Automatically closes the file on exit.
     """
     writer = iio.imopen(filename, "w", plugin="pyav")
-    writer.init_video_stream(codec="libx264", fps=fps, pixel_format="yuv420p")
+    writer.init_video_stream(codec="h264", fps=fps, pixel_format="yuv420p")
     writer._video_stream.options = {"preset": "medium", "crf": "25"}
 
     cmap = plt.get_cmap(cmap)
@@ -531,6 +536,109 @@ def write_frames_preview(frames, write_fun: callable, frame_range=None):
     for i, frame in enumerate(frames):
         frame_num = i if frame_range is None else frame_range[i]
         write_fun(frame, frame_num)
+
+
+def read_avi_frame_range(path, *indices):
+    if len(indices) == 1:
+        indices = (indices[0], indices[0] + 1)
+    elif len(indices) > 2:
+        raise ValueError("indices needs to be len=2 to specify a range")
+
+    frames = list(islice(avi_reader(path), *indices))
+    return frames
+
+
+def read_avi_frame_indices(path, indices: list[int]):
+    for i, frame in enumerate(avi_reader(path)):
+        if i in indices:
+            yield frame
+
+
+def avi_reader(path) -> Iterator[np.ndarray]:
+    with av.open(path, "r") as reader:
+        reader.streams.video[0].thread_type = "AUTO"
+        for frame in reader.decode(video=0):
+            yield frame.to_ndarray()
+
+def gen_batch_sequence(nframes, chunk_size, overlap, offset=0):
+    """
+    Generates batches used to chunk videos prior to extraction.
+
+    Args:
+    nframes (int): total number of frames
+    chunk_size (int): the number of desired chunk size
+    overlap (int): number of overlapping frames
+    offset (int): frame offset
+
+    Returns:
+    out (list): the list of batches
+    """
+
+    seq = range(offset, nframes)
+    out = []
+    for i in range(0, len(seq) - overlap, chunk_size - overlap):
+        out.append(seq[i:i + chunk_size])
+    return out
+
+def batched_video_reader(
+    filename: str | Path,
+    n_frames: int,
+    batch_size=1000,
+    frame_size=(512, 424),
+    bit_depth=16,
+    frame_batches=None,
+    overlap=0,
+    offset=0,
+    **kwargs,
+):
+
+    filename = Path(filename)
+
+    if filename.suffix == ".avi":
+        def batched_avi_reader():
+            reader = avi_reader(filename)
+            unique = batch_size - overlap
+
+            buf = deque(maxlen=overlap)
+            idx_buf = deque(maxlen=overlap)
+
+            # prime the buffer
+            for idx in range(offset, offset + batch_size):
+                try:
+                    frame = next(reader)
+                except StopIteration:
+                    return
+                buf.append(frame)
+                idx_buf.append(idx)
+                yield idx, frame
+
+            start = offset + batch_size
+            # slide by unique frames 
+            for indices in partition_all(unique, range(start, n_frames)):
+
+                # yield the overlapping frames first
+                for i in range(overlap):
+                    yield idx_buf[i], buf[i]
+
+                # then yield the new frames, refill the buffer
+                for idx in indices:
+                    try:
+                        frame = next(reader)
+                    except StopIteration:
+                        return
+                    buf.append(frame)
+                    idx_buf.append(idx)
+                    yield idx, frame
+            
+        reader = batched_avi_reader()
+    elif filename.suffix == ".dat":
+        def batched_dat_reader():
+            for batch in frame_batches:
+                for i, frame in zip(batch, read_frames_raw(filename, frames=batch, frame_size=frame_size, bit_depth=bit_depth, **kwargs)):
+                    yield i, frame
+        reader = batched_dat_reader()
+
+    return partition_all(batch_size, reader)
 
 
 def load_movie_data(

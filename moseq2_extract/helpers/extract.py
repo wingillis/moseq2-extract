@@ -4,6 +4,7 @@ Extraction-helper utility functions.
 
 import subprocess
 import numpy as np
+from math import ceil
 from ruamel.yaml import YAML
 yaml = YAML(typ='safe', pure=True)
 from os import system
@@ -13,11 +14,11 @@ from moseq2_extract.util import read_yaml
 from moseq2_extract.extract.extract import extract_chunk
 from moseq2_extract.helpers.data import check_completion_status
 from moseq2_extract.helpers.parameters import MouseProcessing
-from moseq2_extract.io.video import load_movie_data, write_frames_preview, open_video_writer
+from moseq2_extract.io.video import load_movie_data, write_frames_preview, open_video_writer, batched_video_reader
 
 
 def write_extracted_chunk_to_h5(
-    h5_file, results, config_data, scalars, frame_range, offset
+    h5_file, results, scalars, frame_range, offset
 ):
     """
 
@@ -46,7 +47,7 @@ def write_extracted_chunk_to_h5(
     _write_h5("frames_mask", results["mask_frames"])
 
     # Writing flip classifier results to h5
-    if config_data["flip_classifier"]:
+    if "flips" in results and results["flips"] is not None:
         _write_h5("metadata/extraction/flips", results["flips"])
 
 
@@ -124,7 +125,6 @@ def process_extract_batches(
     bground_im,
     roi,
     frame_batches,
-    str_els,
     output_mov_path,
     scalars=None,
     h5_file=None,
@@ -160,18 +160,31 @@ def process_extract_batches(
         mouse_proc_params.min_height,
         mouse_proc_params.max_height,
     ) as preview_writer:
-        for i, frame_range in enumerate(tqdm(frame_batches, desc="Processing batches")):
-            raw_chunk = load_movie_data(
-                input_file, frame_range, frame_size=bground_im.shape[::-1], **config_data
-            )
+        for i, batch in enumerate(tqdm(
+            batched_video_reader(
+                input_file,
+                batch_size=config_data["chunk_size"],
+                frame_size=bground_im.shape[::-1],
+                n_frames=config_data['finfo']["nframes"],
+                overlap=config_data["chunk_overlap"],
+                **config_data,
+            ),
+            desc="Loading batches",
+            total=ceil(config_data["finfo"]["nframes"] / (config_data["chunk_size"] - config_data["chunk_overlap"])),
+        )):
+            # for i, frame_range in enumerate(tqdm(frame_batches, desc="Processing batches")):
+            frame_range, raw_chunk = zip(*batch)
+            frame_range = np.array(frame_range)
+            # raw_chunk = load_movie_data(
+            #     input_file, frame_range, frame_size=bground_im.shape[::-1], **config_data
+            # )
 
             offset = config_data["chunk_overlap"] if i > 0 else 0
 
             # Get crop-rotated frame batch
             results = extract_chunk(
                 **config_data,
-                **str_els,
-                chunk=raw_chunk,
+                chunk=np.array(raw_chunk),
                 roi=roi,
                 bground=bground_im,
                 tracking_init_mean=tracking_init_mean,
@@ -190,7 +203,7 @@ def process_extract_batches(
 
             if h5_file is not None:
                 write_extracted_chunk_to_h5(
-                    h5_file, results, config_data, scalars, frame_range, offset
+                    h5_file, results, scalars, frame_range, offset
                 )
 
             # Create array for output movie with filtered video and cropped mouse on the top left

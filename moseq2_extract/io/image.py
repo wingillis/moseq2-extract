@@ -6,8 +6,9 @@ import os
 import ast
 import json
 import numpy as np
-import tifffile
-from os.path import join, dirname, exists
+import imageio.v3 as iio
+from pathlib import Path
+from os.path import join
 
 
 def read_tiff_files(input_dir):
@@ -26,7 +27,7 @@ def read_tiff_files(input_dir):
     filenames = []
     for infile in os.listdir(input_dir):
         if infile[-4:] == "tiff":
-            im = read_image(join(input_dir, infile))
+            im = read_tiff(join(input_dir, infile))
             if len(im.shape) == 2:
                 images.append(im)
             elif len(im.shape) == 3:
@@ -36,7 +37,7 @@ def read_tiff_files(input_dir):
     return images, filenames
 
 
-def write_image(
+def write_tiff(
     filename, image, scale=True, scale_factor=None, frame_dtype="uint16", compress=0
 ):
     """
@@ -49,12 +50,11 @@ def write_image(
     scale_factor (int): factor by which to scale image
     frame_dtype (str): array data type
     compress (int): image compression level
-
     """
+    filename = Path(filename)
+    filename.parent.mkdir(parents=True, exist_ok=True)
 
-    file = filename
-
-    metadata = {}
+    metadata = None
 
     if scale:
         max_int = np.iinfo(frame_dtype).max
@@ -70,18 +70,13 @@ def write_image(
             image = (image - scale_factor[0]) / (scale_factor[1] - scale_factor[0])
             image = np.clip(image, 0, 1) * max_int
 
-        metadata = {"scale_factor": str(scale_factor)}
+        metadata = json.dumps({"scale_factor": str(scale_factor)})
 
-    directory = dirname(file)
-    if not exists(directory):
-        os.makedirs(directory)
-
-    tifffile.imsave(
-        file, image.astype(frame_dtype), compress=compress, metadata=metadata
-    )
+    # embed scale_factor metadata in the TIFF description and write with imageio
+    iio.imwrite(filename, image.astype(frame_dtype), compression=compress, description=metadata)
 
 
-def read_image(filename, scale=True, scale_key="scale_factor"):
+def read_tiff(filename, scale=True, scale_key="scale_factor"):
     """
     Load image data
 
@@ -94,26 +89,24 @@ def read_image(filename, scale=True, scale_key="scale_factor"):
     image (numpy.ndarray): loaded image
     """
 
-    with tifffile.TiffFile(filename) as tif:
-        tmp = tif
-        image = tif.asarray()
+    # use imageio to read TIFF and extract metadata
+    with iio.imopen(filename, "r") as reader:
+        desc = reader.metadata(index=0).get('description')
+        image = reader.read()
 
-        if scale:
-            try:
-                image_desc = json.loads(tmp.pages[0].tags["image_description"].as_str()[2:-1])
-            except KeyError:
-                image_desc = json.loads(tmp.pages[0].tags["ImageDescription"].value)
+    if scale:
+        # parse embedded description JSON metadata
+        image_desc = json.loads(desc) if desc else {}
 
-            try:
-                scale_factor = int(image_desc[scale_key])
-            except ValueError:
-                scale_factor = ast.literal_eval(image_desc[scale_key])
+        try:
+            scale_factor = int(image_desc[scale_key])
+            image = image / scale_factor
+        except ValueError:
+            scale_factor = ast.literal_eval(image_desc[scale_key])
 
-            if isinstance(scale_factor, int):
-                image = image / scale_factor
-            elif isinstance(scale_factor, tuple):
-                iinfo = np.iinfo(image.dtype)
-                image = image.astype("float32") / iinfo.max
-                image = image * (scale_factor[1] - scale_factor[0]) + scale_factor[0]
+        if isinstance(scale_factor, tuple):
+            iinfo = np.iinfo(image.dtype)
+            image = image.astype("float32") / iinfo.max
+            image = image * (scale_factor[1] - scale_factor[0]) + scale_factor[0]
 
     return image

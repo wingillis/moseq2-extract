@@ -23,8 +23,6 @@ from moseq2_extract.extract.proc import (
 def extract_chunk(
     chunk,
     iters_min=0,
-    strel_tail=cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (9, 9)),
-    strel_min=cv2.getStructuringElement(cv2.MORPH_RECT, (5, 5)),
     mask_threshold=-20,
     bground=None,
     roi=None,
@@ -114,9 +112,7 @@ def extract_chunk(
     filtered_frames = clean_frames(
         chunk,
         mouse_proc_params=mouse_proc_params,
-        strel_tail=strel_tail,
         iters_min=iters_min,
-        strel_min=strel_min,
         frame_dtype=frame_dtype,
         progress_bar=progress_bar,
     )

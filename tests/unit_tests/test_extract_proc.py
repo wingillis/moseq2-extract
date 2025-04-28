@@ -5,7 +5,7 @@ import glob
 import numpy as np
 import numpy.testing as npt
 from unittest import TestCase
-from moseq2_extract.io.image import read_image
+from moseq2_extract.io.image import read_tiff
 from moseq2_extract.extract.proc import (
     get_roi,
     crop_and_rotate_frames,
@@ -25,7 +25,7 @@ class TestExtractProc(TestCase):
         bground_list = glob.glob("data/tiffs/bground*.tiff")
 
         for bground in bground_list:
-            tmp = read_image(bground, scale=True)
+            tmp = read_tiff(bground, scale=True)
 
             if re.search(r"gradient", bground) is not None:
                 roi = get_roi(
@@ -47,7 +47,7 @@ class TestExtractProc(TestCase):
             dirname = os.path.dirname(bground)
             roi_file = "roi{}_01.tiff".format(re.search(r"\_[a-z|A-Z]*", fname).group())
 
-            ground_truth = read_image(os.path.join(dirname, roi_file), scale=True)
+            ground_truth = read_tiff(os.path.join(dirname, roi_file), scale=True)
 
             frac_nonoverlap_roi1 = np.empty((2,))
             frac_nonoverlap_roi2 = np.empty((2,))
@@ -59,7 +59,7 @@ class TestExtractProc(TestCase):
             )
 
             if os.path.exists(os.path.join(dirname, roi_file2)):
-                ground_truth = read_image(os.path.join(dirname, roi_file2), scale=True)
+                ground_truth = read_tiff(os.path.join(dirname, roi_file2), scale=True)
                 frac_nonoverlap_roi2[0] = np.mean(
                     np.logical_xor(ground_truth, roi[0][1])
                 )
