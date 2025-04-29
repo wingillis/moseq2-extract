@@ -11,6 +11,7 @@ import warnings
 from glob import glob
 import numpy as np
 import urllib.request
+from pathlib import Path
 from copy import deepcopy
 from ruamel.yaml import YAML
 yaml = YAML(typ='safe', pure=True)
@@ -33,7 +34,6 @@ from moseq2_extract.helpers.data import (
     check_completion_status,
 )
 from moseq2_extract.util import (
-    select_strel,
     gen_batch_sequence,
     convert_raw_to_avi_function,
     set_bground_to_plane_fit,
@@ -339,9 +339,10 @@ def extract_wrapper(input_file, output_dir, config_data, num_frames=None, skip=F
     Returns:
     output_dir (str): path to directory containing extraction
     """
-    # TODO: place config data into dataclasses here or above (probably here)
     print("Processing:", input_file)
     # get the basic metadata
+    input_file = Path(input_file)
+    output_dir = Path(output_dir)
 
     # filter for mouse processing parameters
     filtered_params = keyfilter(
@@ -361,12 +362,9 @@ def extract_wrapper(input_file, output_dir, config_data, num_frames=None, skip=F
         "parameters": deepcopy(config_data),
     }
 
-    # save input directory path
-    in_dirname = dirname(input_file)
-
     # loads metadata dictionary and timestamp array.
     acquisition_metadata, config_data["timestamps"] = (
-        handle_extract_metadata(input_file, in_dirname)
+        handle_extract_metadata(input_file)
     )
 
     config_data["finfo"] = get_movie_info(input_file, **config_data)
@@ -404,22 +402,21 @@ def extract_wrapper(input_file, output_dir, config_data, num_frames=None, skip=F
 
     # set up the output directory
     if output_dir is None:
-        output_dir = join(in_dirname, "proc")
-    else:
-        if in_dirname not in output_dir:
-            output_dir = join(in_dirname, output_dir)
+        output_dir = input_file.parent / "proc"
+    elif len(output_dir.parts) < 2 and output_dir.parts[0] != "/":
+        output_dir = input_file.parent / output_dir
 
-    if not exists(output_dir):
-        os.makedirs(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
 
     # Ensure index is int
     if isinstance(config_data["bg_roi_index"], list):
         config_data["bg_roi_index"] = config_data["bg_roi_index"][0]
 
     output_filename = f'results_{config_data["bg_roi_index"]:02d}'
-    status_filename = join(output_dir, f"{output_filename}.yaml")
-    movie_filename = join(output_dir, f"{output_filename}.mp4")
-    results_filename = join(output_dir, f"{output_filename}.h5")
+
+    results_filename = output_dir / f"{output_filename}.h5"
+    movie_filename = results_filename.with_suffix(".mp4")
+    status_filename = results_filename.with_suffix(".yaml")
 
     # Check if session has already been extracted
     if check_completion_status(status_filename) and skip:
@@ -515,6 +512,7 @@ def flip_file_wrapper(config_file, output_dir, selected_flip=None):
     Returns:
     None
     """
+    output_dir = Path(output_dir)
 
     flip_files = {
         "large mice with fibers (K2)": "https://storage.googleapis.com/flip-classifiers/flip_classifier_k2_largemicewithfiber.pkl",
@@ -535,21 +533,20 @@ def flip_file_wrapper(config_file, output_dir, selected_flip=None):
     while selected_flip is None:
         try:
             selected_flip = key_list[int(input("Enter a selection "))]
-        except ValueError:
+        except (ValueError, IndexError):
             print("Please enter a valid number listed above")
-            continue
 
-    if not exists(output_dir):
-        os.makedirs(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
 
     selection = flip_files[selected_flip]
 
-    output_filename = join(output_dir, basename(selection))
+    output_filename = output_dir / Path(selection).name
 
     urllib.request.urlretrieve(selection, output_filename)
     print("Successfully downloaded flip file to", output_filename)
 
     # Update the config file with the latest path to the flip classifier
+    # TODO: update for toml file instead of yaml
     try:
         config_data = read_yaml(config_file)
         config_data["flip_classifier"] = output_filename

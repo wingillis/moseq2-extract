@@ -259,33 +259,32 @@ def copy_manifest_results(manifest, output_dir):
             yaml.dump(v["yaml_dict"], f)
 
 
-def handle_extract_metadata(input_file, dirname):
+def handle_extract_metadata(input_file):
     """
     Extract metadata and timestamp in the extraction.
 
     Args:
-    input_file (str): path to input file to extract
-    dirname (str): path to directory where extraction files reside.
+    input_file (Path): path to input file to extract
 
     Returns:
     acquisition_metadata (dict): key-value pairs of JSON contents
     timestamps (1D array): list of loaded timestamps
     """
-
     alternate_correct = False
     from_depth_file = False
 
     # Handling non-compressed session paths
-    metadata_path = join(dirname, "metadata.json")
-    timestamp_path = join(dirname, "depth_ts.txt")
-    alternate_timestamp_path = join(dirname, "timestamps.csv")
-    # Checks for alternative timestamp file if original .txt extension does not exist
-    if not exists(timestamp_path) and exists(alternate_timestamp_path):
+    metadata_path = input_file.with_name("metadata.json")
+    timestamp_path = input_file.with_name("depth_ts.txt")
+    alternate_timestamp_path = input_file.with_name("timestamps.csv")
+
+    # Checks for alternative timestamp file if original .txt version does not exist
+    if not timestamp_path.exists() and alternate_timestamp_path.exists():
         timestamp_path = alternate_timestamp_path
         alternate_correct = True
     elif not (
-        exists(timestamp_path) or exists(alternate_timestamp_path)
-    ) and input_file.endswith(".mkv"):
+        timestamp_path.exists() or alternate_timestamp_path.exists()
+    ) and input_file.suffix == ".mkv":
         from_depth_file = True
 
     acquisition_metadata = load_metadata(metadata_path)
