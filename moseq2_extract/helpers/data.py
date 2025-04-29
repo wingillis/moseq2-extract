@@ -5,7 +5,6 @@ Contains helper functions for handling/storing data during extraction.
 import os
 import h5py
 import shutil
-import tarfile
 import warnings
 import numpy as np
 import moseq2_extract
@@ -271,51 +270,23 @@ def handle_extract_metadata(input_file, dirname):
     Returns:
     acquisition_metadata (dict): key-value pairs of JSON contents
     timestamps (1D array): list of loaded timestamps
-    tar (bool): indicator for whether the file is compressed.
     """
 
-    tar = None
-    tar_members = None
     alternate_correct = False
     from_depth_file = False
 
-    # Handle TAR files
-    if input_file.endswith((".tar.gz", ".tgz")):
-        print(f"Scanning tarball {input_file} (this will take a minute)")
-        # compute NEW psuedo-dirname now, `input_file` gets overwritten below with test_vid.dat tarinfo...
-        dirname = join(
-            dirname, basename(input_file).replace(".tar.gz", "").replace(".tgz", "")
-        )
-
-        tar = tarfile.open(input_file, "r:gz")
-        tar_members = tar.getmembers()
-        tar_names = [_.name for _ in tar_members]
-
-    if tar is not None:
-        # Handling tar paths
-        metadata_path = tar.extractfile(tar_members[tar_names.index("metadata.json")])
-        if "depth_ts.txt" in tar_names:
-            timestamp_path = tar.extractfile(
-                tar_members[tar_names.index("depth_ts.txt")]
-            )
-        elif "timestamps.csv" in tar_names:
-            timestamp_path = tar.extractfile(
-                tar_members[tar_names.index("timestamps.csv")]
-            )
-            alternate_correct = True
-    else:
-        # Handling non-compressed session paths
-        metadata_path = join(dirname, "metadata.json")
-        timestamp_path = join(dirname, "depth_ts.txt")
-        alternate_timestamp_path = join(dirname, "timestamps.csv")
-        # Checks for alternative timestamp file if original .txt extension does not exist
-        if not exists(timestamp_path) and exists(alternate_timestamp_path):
-            timestamp_path = alternate_timestamp_path
-            alternate_correct = True
-        elif not (
-            exists(timestamp_path) or exists(alternate_timestamp_path)
-        ) and input_file.endswith(".mkv"):
-            from_depth_file = True
+    # Handling non-compressed session paths
+    metadata_path = join(dirname, "metadata.json")
+    timestamp_path = join(dirname, "depth_ts.txt")
+    alternate_timestamp_path = join(dirname, "timestamps.csv")
+    # Checks for alternative timestamp file if original .txt extension does not exist
+    if not exists(timestamp_path) and exists(alternate_timestamp_path):
+        timestamp_path = alternate_timestamp_path
+        alternate_correct = True
+    elif not (
+        exists(timestamp_path) or exists(alternate_timestamp_path)
+    ) and input_file.endswith(".mkv"):
+        from_depth_file = True
 
     acquisition_metadata = load_metadata(metadata_path)
     if not from_depth_file:
@@ -323,7 +294,7 @@ def handle_extract_metadata(input_file, dirname):
     else:
         timestamps = load_timestamps_from_movie(input_file)
 
-    return acquisition_metadata, timestamps, tar
+    return acquisition_metadata, timestamps
 
 
 # extract h5 helper function

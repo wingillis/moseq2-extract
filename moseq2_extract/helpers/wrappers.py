@@ -285,7 +285,7 @@ def get_roi_wrapper(input_file, config_data, output_dir=None):
     # pass in config_data['finfo']['dims'] for frame size otherwise frame size is hard coded to 512x424
     first_frame = load_movie_data(
         input_file, 0, frame_size=config_data["finfo"]["dims"], **config_data
-    )  # there is a tar object flag that must be set!!
+    )
     write_tiff(
         join(output_dir, "first_frame.tiff"),
         first_frame,
@@ -364,15 +364,10 @@ def extract_wrapper(input_file, output_dir, config_data, num_frames=None, skip=F
     # save input directory path
     in_dirname = dirname(input_file)
 
-    # If input file is compressed (tarFile), returns decompressed file path and tar bool indicator.
-    # Also gets loads respective metadata dictionary and timestamp array.
-    acquisition_metadata, config_data["timestamps"], config_data["tar"] = (
+    # loads metadata dictionary and timestamp array.
+    acquisition_metadata, config_data["timestamps"] = (
         handle_extract_metadata(input_file, in_dirname)
     )
-
-    # updating input_file reference to open tar file object if input file ends with [.tar/.tar.gz]
-    if config_data["tar"] is not None:
-        input_file = config_data["tar"]
 
     config_data["finfo"] = get_movie_info(input_file, **config_data)
 
@@ -485,15 +480,14 @@ def extract_wrapper(input_file, output_dir, config_data, num_frames=None, skip=F
 
     # Compress the depth file to avi format; compresses original raw file by ~8x.
     try:
-        if config_data["tar"] is None:
-            if input_file.endswith("dat") and config_data["compress"]:
-                convert_raw_to_avi_function(
-                    input_file,
-                    chunk_size=config_data["compress_chunk_size"],
-                    fps=config_data["fps"],
-                    delete=False,  # to be changed when we're ready!
-                    threads=config_data["compress_threads"],
-                )
+        if input_file.endswith("dat") and config_data["compress"]:
+            convert_raw_to_avi_function(
+                input_file,
+                chunk_size=config_data["compress_chunk_size"],
+                fps=config_data["fps"],
+                delete=False,  # to be changed when we're ready!
+                threads=config_data["compress_threads"],
+            )
     except AttributeError as e:
         print("Error converting raw video to avi format, continuing anyway...")
         print(e)

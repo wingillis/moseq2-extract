@@ -1,7 +1,5 @@
 import os
-import sys
 import shutil
-import tarfile
 from ruamel.yaml import YAML
 yaml = YAML(typ='safe', pure=True)
 from unittest import TestCase
@@ -98,29 +96,13 @@ class TestHelperData(TestCase):
 
     def test_handle_extract_metadata(self):
         dirname = "data/"
-        tmp_file = "data/test_vid.tar.gz"
-        write_fake_movie(tmp_file)
-
-        with tarfile.open(tmp_file, "w:gz") as tar:
-            tar.add(dirname, arcname="test_vid.dat")
-            tar.add(os.path.join(dirname, "metadata.json"), arcname="metadata.json")
-            tar.add(os.path.join(dirname, "depth_ts.txt"), arcname="depth_ts.txt")
-
-        acq_metadata, timestamps, tar = handle_extract_metadata(tmp_file, dirname)
-
-        assert isinstance(acq_metadata, dict)
-        assert len(timestamps.shape) == 1
-        assert tar is not None
-
-        os.remove(tmp_file)
 
         tmp_file = "data/test_vid.dat"
         write_fake_movie(tmp_file)
 
-        acq_metadata, timestamps, tar = handle_extract_metadata(tmp_file, dirname)
+        acq_metadata, timestamps = handle_extract_metadata(tmp_file, dirname)
 
         assert isinstance(acq_metadata, dict)
         assert len(timestamps.shape) == 1
-        assert tar is None
 
         os.remove(tmp_file)

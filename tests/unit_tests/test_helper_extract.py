@@ -84,7 +84,6 @@ class TestHelperExtract(TestCase):
 
         config_data["flip_classifier"] = flip_file
         config_data["true_depth"] = true_depth
-        config_data["tar"] = False
 
         status_dict = {
             "parameters": deepcopy(config_data),

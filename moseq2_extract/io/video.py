@@ -5,7 +5,6 @@ Video and video-metadata read/write functions.
 import av
 import os
 import cv2
-import tarfile
 import datetime
 import subprocess
 import numpy as np
@@ -21,24 +20,18 @@ from contextlib import contextmanager
 from typing import BinaryIO, Iterator
 
 @contextmanager
-def _open_raw_source(src: str | tarfile.TarFile) -> Iterator[tuple[BinaryIO, int]]:
+def _open_raw_source(src: str) -> Iterator[tuple[BinaryIO, int]]:
     """
-    Context‐manager for opening a raw source (either a path to a .dat file or a tarfile).
+    Context manager for opening a raw source (a path to a .dat file).
     Yields:
-      f: file‐like object opened for reading raw bytes
+      f: file-like object opened for reading raw bytes
       size: total size in bytes of that source
     Automatically closes the file on exit.
     """
     f = None
     try:
-        if isinstance(src, tarfile.TarFile):
-            # find the depth.dat member
-            member = next(m for m in src.getmembers() if m.name.endswith("depth.dat"))
-            f = src.extractfile(member)
-            size = member.size
-        else:
-            f = open(src, "rb")
-            size = os.stat(src).st_size
+        f = open(src, "rb")
+        size = os.stat(src).st_size
         yield f, size
     finally:
         if f is not None:
@@ -108,20 +101,11 @@ def read_frames_raw(
 
     dims = (len(frames), frame_size[1], frame_size[0])
 
-    if isinstance(filename, tarfile.TarFile):
-        tar_members = filename.getmembers()
-        tar_names = [_.name for _ in tar_members]
-        input_file = tar_members[tar_names.index("depth.dat")]
-        with filename.extractfile(input_file) as f:
-            f.seek(int(seek_point))
-            chunk = f.read(int(len(frames) * vid_info["bytes_per_frame"]))
-            chunk = np.frombuffer(chunk, dtype=np.dtype(movie_dtype)).reshape(dims)
-    else:
-        with open(filename, "rb") as f:
-            f.seek(int(seek_point))
-            chunk = np.fromfile(
-                file=f, dtype=np.dtype(movie_dtype), count=read_points
-            ).reshape(dims)
+    with open(filename, "rb") as f:
+        f.seek(int(seek_point))
+        chunk = np.fromfile(
+            file=f, dtype=np.dtype(movie_dtype), count=read_points
+        ).reshape(dims)
 
     return chunk
 
@@ -661,15 +645,7 @@ def load_movie_data(
     if isinstance(frames, int):
         frames = [frames]
     try:
-        if isinstance(frames, tarfile.TarFile):
-            frame_data = read_frames_raw(
-                filename,
-                frames=frames,
-                frame_size=frame_size,
-                bit_depth=bit_depth,
-                **kwargs,
-            )
-        elif filename.lower().endswith(".dat"):
+        if filename.lower().endswith(".dat"):
             frame_data = read_frames_raw(
                 filename,
                 frames=frames,
@@ -713,11 +689,7 @@ def get_movie_info(
     """
 
     try:
-        if isinstance(filename, tarfile.TarFile):
-            metadata = get_raw_info(
-                filename, frame_size=frame_size, bit_depth=bit_depth
-            )
-        elif filename.lower().endswith(".dat"):
+        if filename.lower().endswith(".dat"):
             metadata = get_raw_info(
                 filename, frame_size=frame_size, bit_depth=bit_depth
             )

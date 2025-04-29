@@ -155,7 +155,7 @@ def batch_extract(
             recursive_find_unextracted_dirs(
                 input_folder,
                 extension=ex,
-                skip_checks=ex in (".tgz", ".tar.gz") or kwargs["skip_checks"],
+                skip_checks=kwargs["skip_checks"],
                 yaml_path=yaml_path,
             )
         )

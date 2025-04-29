@@ -7,7 +7,6 @@ import cv2
 import json
 import h5py
 import click
-import tarfile
 import warnings
 import numpy as np
 from pathlib import Path
@@ -249,9 +248,7 @@ def detect_and_set_camera_parameters(config_data, input_file=None):
         },
     }
 
-    if isinstance(input_file, tarfile.TarFile):
-        detected = 'kinect'
-    elif camera_type == 'auto' and input_file is not None:
+    if camera_type == 'auto' and input_file is not None:
         if input_file.endswith('.dat'):
             detected = 'kinect'
         elif input_file.endswith('.mkv'):

@@ -4,7 +4,6 @@ Video pre-processing utilities for detecting ROIs and extracting raw data.
 
 import cv2
 import joblib
-import tarfile
 import scipy.stats
 import numpy as np
 import scipy.signal
@@ -106,8 +105,7 @@ def get_bground_im_file(frames_file: str | Path, frame_stride=250, med_scale=5, 
     
     bground_path = Path(output_dir) / 'bground.tiff'
 
-    if not isinstance(frames_file, tarfile.TarFile):
-        kwargs = deepcopy(kwargs)
+    kwargs = deepcopy(kwargs)
 
     # Compute background image if it doesn't exist. Otherwise, load from file
     if not bground_path.exists() or kwargs.get('recompute_bg', False):
