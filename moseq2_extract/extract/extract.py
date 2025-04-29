@@ -89,17 +89,11 @@ def extract_chunk(
     parameters (dict): mean and covariance estimates for each frame (if em_tracking=True), otherwise None.
     """
 
+    # Perform background subtraction
     if bground is not None:
-        # Perform background subtraction
-        if not kwargs.get('graduate_walls', False):
-            # pixels with a value of 0 are depth values that could not be computed
-            chunk = ((bground - chunk) * (chunk != 0)).astype(frame_dtype)
-        else:
-            # Subtracting only background area where mouse is not on the bucket edge
-            mouse_on_edge = (bground < true_depth) & (chunk < bground)
-            chunk = (bground - chunk) * np.logical_not(mouse_on_edge) + (
-                true_depth - chunk
-            ) * mouse_on_edge
+
+        # pixels with a value of 0 are depth values that could not be computed
+        chunk = ((bground - chunk) * (chunk != 0)).astype(frame_dtype)
 
         # Threshold chunk depth values at min and max heights
         chunk = threshold_chunk(chunk, mouse_proc_params.min_height, mouse_proc_params.max_height).astype(frame_dtype)
