@@ -85,6 +85,27 @@ def get_largest_cc(frames, progress_bar=False):
     return foreground_obj
 
 
+def find_smoothest_background(frames: np.ndarray) -> np.ndarray:
+    """Finds smoothest background to reduce the influence of a still
+    mouse on background computation."""
+    frames = frames.copy()
+    # get rid of zeros
+    frames[frames == 0] = np.nan
+
+    smooth_outputs = {}
+    bground_options = {}
+    for q in np.arange(0.5, 1.0, 0.1):
+        bground = np.nanquantile(frames, q, axis=0)
+        gx = cv2.Sobel(bground, cv2.CV_64F, 1, 0, ksize=5)
+        gy = cv2.Sobel(bground, cv2.CV_64F, 0, 1, ksize=5)
+        gmag = cv2.magnitude(gx, gy)
+        smooth_outputs[q] = np.nanmean(gmag)
+        bground_options[q] = bground
+    # get key for max smoothness
+    q = min(smooth_outputs, key=smooth_outputs.get)
+    return bground_options[q]
+
+
 def get_bground_im_file(frames_file: str | Path, frame_stride=250, med_scale=5, output_dir=None, **kwargs):
     """
     Load or compute background from file.
@@ -129,21 +150,7 @@ def get_bground_im_file(frames_file: str | Path, frame_stride=250, med_scale=5, 
 
     if kwargs.get("bg_v2", False):
         # run an optimization to determine the smoothest quantile to sample from
-
-        # get rid of zeros
-        frame_store[frame_store == 0] = np.nan
-
-        smooth_outputs = {}
-        for q in np.arange(0.5, 1.0, 0.1):
-            bground = np.nanquantile(frame_store, q, axis=0)
-            gx = cv2.Sobel(bground, cv2.CV_64F, 1, 0, ksize=5)
-            gy = cv2.Sobel(bground, cv2.CV_64F, 0, 1, ksize=5)
-            gmag = cv2.magnitude(gx, gy)
-            smooth_outputs[q] = np.nanmean(gmag)
-        # get key for max smoothness
-        q = min(smooth_outputs, key=smooth_outputs.get)
-        bground = np.nanquantile(frame_store, q, axis=0)
-
+        bground = find_smoothest_background(frame_store)
     else:
         bground = np.nanmedian(frame_store, axis=0)
 

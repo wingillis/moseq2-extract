@@ -5,12 +5,10 @@ Extraction-helper utility functions.
 import subprocess
 import numpy as np
 from math import ceil
-from ruamel.yaml import YAML
-yaml = YAML(typ='safe', pure=True)
 from os import system
 from pathlib import Path
 from tqdm.auto import tqdm
-from moseq2_extract.util import read_yaml
+from moseq2_extract.util import read_yaml, write_yaml
 from moseq2_extract.extract.extract import extract_chunk
 from moseq2_extract.helpers.data import check_completion_status
 from moseq2_extract.helpers.parameters import MouseProcessing
@@ -159,7 +157,7 @@ def process_extract_batches(
         mouse_proc_params.min_height,
         mouse_proc_params.max_height,
     ) as preview_writer:
-        for i, batch in enumerate(tqdm(
+        for i, (frame_range, raw_chunk) in enumerate(tqdm(
             batched_video_reader(
                 input_file,
                 batch_size=config_data["chunk_size"],
@@ -171,16 +169,13 @@ def process_extract_batches(
             desc="Loading batches",
             total=ceil(config_data["finfo"]["nframes"] / (config_data["chunk_size"] - config_data["chunk_overlap"])),
         )):
-            # for i, frame_range in enumerate(tqdm(frame_batches, desc="Processing batches")):
-            frame_range, raw_chunk = zip(*batch)
-            frame_range = np.array(frame_range)
 
             offset = config_data["chunk_overlap"] if i > 0 else 0
 
             # Get crop-rotated frame batch
             results = extract_chunk(
                 **config_data,
-                chunk=np.array(raw_chunk),
+                chunk=raw_chunk,
                 roi=roi,
                 bground=bground_im,
                 tracking_init_mean=tracking_init_mean,
@@ -248,8 +243,7 @@ def run_slurm_extract(input_dir, to_extract, config_data, skip_extracted=False):
             # get and write session-specific parameters
             session_key = depth_file.parent.name
 
-            with open(output_file, "w") as f:
-                yaml.dump(session_configs.get(session_key, config_data), f)
+            write_yaml(output_file, session_configs.get(session_key, config_data))
 
     # Construct sbatch command for slurm
     commands = ""

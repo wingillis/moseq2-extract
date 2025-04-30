@@ -8,16 +8,16 @@ import shutil
 import warnings
 import numpy as np
 import moseq2_extract
-from ruamel.yaml import YAML
-yaml = YAML(typ='safe', pure=True)
+from pathlib import Path
 from tqdm.auto import tqdm
-from cytoolz import keymap
+from cytoolz import keymap, dissoc
 from os.path import exists, join, dirname, basename, splitext
 from moseq2_extract.util import (
     h5_to_dict,
     load_timestamps,
     load_metadata,
     read_yaml,
+    write_yaml,
     camel_to_snake,
     load_textdata,
     build_path,
@@ -27,19 +27,20 @@ from moseq2_extract.util import (
 from moseq2_extract.helpers.parameters import MouseProcessing
 
 
-def check_completion_status(status_filename):
+def check_completion_status(status_filename: str | Path):
     """
     Read a results_00.yaml (status file) and checks whether the session has been
     fully extracted.
 
     Args:
-    status_filename (str): path to results_00.yaml
+    status_filename: path to results_00.yaml
 
     Returns:
     complete (bool): If True, data has been extracted to completion.
     """
+    status_filename = Path(status_filename)
 
-    if exists(status_filename):
+    if status_filename.exists():
         return read_yaml(status_filename)["complete"]
     return False
 
@@ -253,9 +254,10 @@ def copy_manifest_results(manifest, output_dir):
         if exists(mp4_path):
             shutil.copyfile(mp4_path, join(output_dir, f'{v["copy_path"]}.mp4'))
 
-        v["yaml_dict"].pop("extraction_metadata", None)
-        with open(f'{join(output_dir, v["copy_path"])}.yaml', "w") as f:
-            yaml.dump(v["yaml_dict"], f)
+        write_yaml(
+            f"{join(output_dir, v['copy_path'])}.yaml",
+            dissoc(v["yaml_dict"], "extraction_metadata"),
+        )
 
 
 def handle_extract_metadata(input_file):

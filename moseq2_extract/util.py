@@ -16,7 +16,6 @@ from cytoolz import valmap, concat
 from moseq2_extract.io.image import write_tiff
 from ruamel.yaml.error import UnsafeLoaderWarning
 from moseq2_extract.io.video import get_movie_info
-from moseq2_extract.helpers.parameters import MouseProcessing
 from os.path import join, exists, splitext, basename, dirname
 
 

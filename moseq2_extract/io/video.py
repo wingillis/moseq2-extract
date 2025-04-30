@@ -5,13 +5,11 @@ Video and video-metadata read/write functions.
 import av
 import os
 import cv2
-import datetime
 import subprocess
 import numpy as np
 import imageio.v3 as iio
 import matplotlib.pyplot as plt
 from tqdm.auto import tqdm
-from itertools import islice
 from pathlib import Path
 from cytoolz import partition_all
 from collections import deque
@@ -63,52 +61,6 @@ def get_raw_info(filename, bit_depth=16, frame_size=(512, 424)):
     return file_info
 
 
-def read_frames_raw_old(
-    filename,
-    frames=None,
-    frame_size=(512, 424),
-    bit_depth=16,
-    movie_dtype="<u2",
-    **kwargs,
-):
-    """
-    Reads in data from raw binary file.
-
-    Args:
-    filename (string): name of raw data file
-    frames (list or range): frames to extract
-    frame_dims (tuple): wxh of frames in pixels
-    bit_depth (int): bits per pixel (default: 16)
-    movie_dtype (str): An indicator for numpy to store the piped ffmpeg-read video in memory for processing.
-
-    Returns:
-    chunk (numpy ndarray): nframes x h x w
-    """
-
-    vid_info = get_raw_info(filename, frame_size=frame_size, bit_depth=bit_depth)
-
-    if vid_info["dims"] != frame_size:
-        frame_size = vid_info["dims"]
-
-    if isinstance(frames, int):
-        frames = [frames]
-    elif not frames or isinstance(frames, range) and len(frames) == 0:
-        frames = range(0, vid_info["nframes"])
-
-    seek_point = np.maximum(0, frames[0] * vid_info["bytes_per_frame"])
-    read_points = len(frames) * frame_size[0] * frame_size[1]
-
-    dims = (len(frames), frame_size[1], frame_size[0])
-
-    with open(filename, "rb") as f:
-        f.seek(int(seek_point))
-        chunk = np.fromfile(
-            file=f, dtype=np.dtype(movie_dtype), count=read_points
-        ).reshape(dims)
-
-    return chunk
-
-
 def read_frames_raw(
     file_name: Path,
     frame_indices: list | np.ndarray | None = None,
@@ -146,71 +98,6 @@ def get_avi_metadata(path: Path) -> int:
         "fps": video_stream.average_rate,
         "bytes": width * height * 2 * n,  # each pixel is 2 bytes
     }
-
-
-# https://gist.github.com/hiwonjoon/035a1ead72a767add4b87afe03d0dd7b
-def get_video_info(filename, mapping="DEPTH", threads=8, count_frames=False, **kwargs):
-    """
-    Get file metadata from videos.
-
-    Args:
-    filename (str): name of file to read video metadata from.
-    mapping (str): chooses the stream to read from files.
-    threads (int): number of threads to simultanoues run the ffprobe command
-    count_frames (bool): indicates whether to count the frames individually.
-
-    Returns:
-    out_dict (dict): dictionary containing video file metadata
-    """
-
-    mapping_dict = get_stream_names(filename)
-    if isinstance(mapping, str):
-        mapping = mapping_dict.get(mapping, 0)
-
-    stream_str = "stream=width,height,r_frame_rate,"
-    if count_frames:
-        stream_str += "nb_read_frames"
-    else:
-        stream_str += "nb_frames"
-
-    command = [
-        "ffprobe",
-        "-v",
-        "fatal",
-        "-select_streams",
-        f"v:{mapping}",
-        "-show_entries",
-        stream_str,
-        "-of",
-        "default=noprint_wrappers=1:nokey=1",
-        "-threads",
-        str(threads),
-        filename,
-        "-sexagesimal",
-    ]
-
-    if count_frames:
-        command += ["-count_frames"]
-
-    ffmpeg = subprocess.Popen(command, stderr=subprocess.PIPE, stdout=subprocess.PIPE)
-    out, err = ffmpeg.communicate()
-
-    if err:
-        print(err)
-
-    out = out.decode().split("\n")
-    out_dict = {
-        "file": filename,
-        "dims": (int(float(out[0])), int(float(out[1]))),
-        "fps": float(out[2].split("/")[0]) / float(out[2].split("/")[1]),
-    }
-
-    try:
-        out_dict["nframes"] = int(out[3])
-    except ValueError:
-        out_dict["nframes"] = None
-
-    return out_dict
 
 
 # simple command to pipe frames to an ffv1 file
@@ -305,148 +192,6 @@ def write_frames(
         return pipe
 
 
-def get_stream_names(filename, stream_tag="title"):
-    """
-    Run an FFProbe command to determine whether an input video file contains multiple streams, and
-    returns a stream_name to paired int values to extract the desired stream.
-
-    Args:
-    filename (str): path to video file to get streams from.
-    stream_tag (str): value of the stream tags for ffprobe command to return
-
-    Returns:
-    out (dict): Dictionary of string to int pairs for the included streams in the mkv file.
-    Dict will be used to choose the correct mapping number to choose which stream to read in read_frames().
-    """
-
-    command = [
-        "ffprobe",
-        "-v",
-        "fatal",
-        "-show_entries",
-        "stream_tags={}".format(stream_tag),
-        "-of",
-        "default=noprint_wrappers=1:nokey=1",
-        filename,
-    ]
-
-    ffmpeg = subprocess.Popen(command, stderr=subprocess.PIPE, stdout=subprocess.PIPE)
-    out, err = ffmpeg.communicate()
-
-    if err or len(out) == 0:
-        return {"DEPTH": 0}
-
-    out = out.decode("utf-8").rstrip("\n").split("\n")
-
-    return {o: i for i, o in enumerate(out)}
-
-
-def read_frames(
-    filename: Path,
-    frames=range(0),
-    threads=6,
-    fps=30,
-    frames_is_timestamp=False,
-    pixel_format="gray16le",
-    movie_dtype="uint16",
-    frame_size=None,
-    slices=24,
-    slicecrc=1,
-    mapping="DEPTH",
-    get_cmd=False,
-    finfo=None,
-    **kwargs,
-):
-    """
-    Read in frames from the .mp4/.avi file using a pipe from ffmpeg.
-
-    Args:
-    filename (str): filename to get frames from
-    frames (list or numpy.ndarray): list of frames to grab
-    threads (int): number of threads to use for decode
-    fps (int): frame rate of camera
-    frames_is_timestamp (bool): if False, indicates timestamps represent kinect v2 absolute machine timestamps,
-    pixel_format (str): ffmpeg pixel format of data
-    movie_dtype (str): An indicator for numpy to store the piped ffmpeg-read video in memory for processing.
-    frame_size (str): wxh frame size in pixels
-    slices (int): number of slices to use for decode
-    slicecrc (int): check integrity of slices
-    mapping (str): the stream to read from mkv files.
-    get_cmd (bool): indicates whether function should return ffmpeg command (instead of executing).
-    finfo (dict): dictionary containing video file metadata
-
-    Returns:
-    video (numpy.ndarray):  frames x rows x columns
-    """
-
-    if finfo is None:
-        finfo = get_video_info(filename, threads=threads, **kwargs)
-
-    if frames is None or len(frames) == 0:
-        frames = np.arange(finfo["nframes"], dtype="int64")
-
-    if not frame_size:
-        frame_size = finfo["dims"]
-
-    # Compute starting time point to retrieve frames from
-    if frames_is_timestamp:
-        start_time = str(datetime.timedelta(seconds=frames[0]))
-    else:
-        start_time = str(datetime.timedelta(seconds=frames[0] / fps))
-
-    command = [
-        "ffmpeg",
-        "-loglevel",
-        "fatal",
-        "-ss",
-        start_time,
-        "-i",
-        str(filename),
-        "-vframes",
-        str(len(frames)),
-        "-f",
-        "image2pipe",
-        "-s",
-        "{:d}x{:d}".format(frame_size[0], frame_size[1]),
-        "-pix_fmt",
-        pixel_format,
-        "-threads",
-        str(threads),
-        "-slices",
-        str(slices),
-        "-slicecrc",
-        str(slicecrc),
-        "-vcodec",
-        "rawvideo",
-    ]
-
-    if isinstance(mapping, str):
-        mapping_dict = get_stream_names(filename)
-        mapping = mapping_dict.get(mapping, 0)
-
-    if filename.suffix == ".avi":
-        command += ["-map", f"0:{mapping}"]
-        command += ["-vsync", "0"]
-
-    command += ["-"]
-
-    if get_cmd:
-        return command
-
-    pipe = subprocess.Popen(command, stderr=subprocess.PIPE, stdout=subprocess.PIPE)
-    out, err = pipe.communicate()
-
-    if err:
-        print("Error:", err)
-        return None
-
-    video = np.frombuffer(out, dtype=movie_dtype).reshape(
-        (len(frames), frame_size[1], frame_size[0])
-    )
-
-    return video.astype("uint16")
-
-
 @contextmanager
 def open_video_writer(filename, fps, depth_min, depth_max, cmap="jet"):
     """
@@ -501,16 +246,6 @@ def write_frames_preview(frames, write_fun: callable, frame_range=None):
     for i, frame in enumerate(frames):
         frame_num = i if frame_range is None else frame_range[i]
         write_fun(frame, frame_num)
-
-
-def read_avi_frame_range(path, *indices):
-    if len(indices) == 1:
-        indices = (indices[0], indices[0] + 1)
-    elif len(indices) > 2:
-        raise ValueError("indices needs to be len=2 to specify a range")
-
-    frames = list(islice(avi_reader(path), *indices))
-    return frames
 
 
 def avi_reader(path) -> Iterator[np.ndarray]:
@@ -577,11 +312,10 @@ def batched_video_reader(
     batch_size=1000,
     frame_size=(512, 424),
     bit_depth=16,
-    frame_batches=None,
     overlap=0,
     offset=0,
     **kwargs,
-):
+) -> Iterator[tuple[np.ndarray, np.ndarray]]:
 
     filename = Path(filename)
 
@@ -639,7 +373,10 @@ def batched_video_reader(
 
         reader = batched_dat_reader()
 
-    return partition_all(batch_size, reader)
+    for batch in partition_all(batch_size, reader):
+        # batch is a list of tuples (index, frame)
+        indices, frames = zip(*batch)
+        yield np.array(indices), np.array(frames)
 
 
 def get_movie_info(

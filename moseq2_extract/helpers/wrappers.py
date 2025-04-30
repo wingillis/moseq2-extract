@@ -13,8 +13,6 @@ import numpy as np
 import urllib.request
 from pathlib import Path
 from copy import deepcopy
-from ruamel.yaml import YAML
-yaml = YAML(typ='safe', pure=True)
 from tqdm.auto import tqdm
 from cytoolz import partial, keyfilter, dissoc
 from moseq2_extract.helpers.parameters import MouseProcessing, ArenaParams
@@ -23,7 +21,7 @@ from moseq2_extract.helpers.extract import process_extract_batches
 from moseq2_extract.extract.proc import get_roi, get_bground_im_file
 from os.path import join, exists, dirname, basename, abspath, splitext
 from moseq2_extract.io.video import get_movie_info, write_frames, batched_video_reader
-from moseq2_extract.util import mouse_threshold_filter, filter_warnings, read_yaml
+from moseq2_extract.util import mouse_threshold_filter, filter_warnings, read_yaml, write_yaml
 from moseq2_extract.helpers.data import (
     handle_extract_metadata,
     create_extract_h5,
@@ -34,7 +32,6 @@ from moseq2_extract.helpers.data import (
     check_completion_status,
 )
 from moseq2_extract.util import (
-    gen_batch_sequence,
     convert_raw_to_avi_function,
     set_bground_to_plane_fit,
     recursive_find_h5s,
@@ -73,8 +70,7 @@ def copy_h5_metadata_to_yaml_wrapper(input_dir, h5_metadata_path):
             tup[0]["metadata"] = dict(tmp)
 
         new_file = f"{basename(tup[1])}_update.yaml"
-        with open(new_file, "w+") as f:
-            yaml.dump(tup[0], f)
+        write_yaml(new_file, tup[0])
 
         if new_file != tup[1]:
             shutil.move(new_file, tup[1])
@@ -119,8 +115,7 @@ def generate_index_wrapper(input_dir, output_file):
     output_dict = build_index_dict(file_with_uuids)
 
     # write out index yaml
-    with open(output_file, "w") as f:
-        yaml.dump(output_dict, f)
+    write_yaml(output_file, output_dict)
 
     return output_file
 
@@ -215,8 +210,7 @@ def generate_index_from_agg_res_wrapper(input_dir):
     output_file = os.path.join(os.path.dirname(input_dir), "moseq2-index.yaml")
 
     # write out index yaml
-    with open(output_file, "w") as f:
-        yaml.dump(index_data, f)
+    write_yaml(output_file, index_data)
 
 
 def get_roi_wrapper(input_file, config_data, output_dir=None):
@@ -403,8 +397,7 @@ def extract_wrapper(input_file, output_dir, config_data, num_frames=None, skip=F
         print("Skipping...")
         return
 
-    with open(status_filename, "w") as f:
-        yaml.dump(status_dict, f)
+    write_yaml(status_filename, status_dict)
 
     # Compute ROIs
     roi, bground_im, first_frame = get_roi_wrapper(
@@ -472,8 +465,8 @@ def extract_wrapper(input_file, output_dir, config_data, num_frames=None, skip=F
     if status_dict["parameters"].get("true_depth") is None:
         # config_data.get('true_depth') is numpy.float64 and yaml.dump can't represent the object
         status_dict["parameters"]["true_depth"] = float(config_data.get("true_depth"))
-    with open(status_filename, "w") as f:
-        yaml.dump(status_dict, f)
+
+    write_yaml(status_filename, status_dict)
 
     return output_dir
 
@@ -530,8 +523,7 @@ def flip_file_wrapper(config_file, output_dir, selected_flip=None):
         config_data = read_yaml(config_file)
         config_data["flip_classifier"] = output_filename
 
-        with open(config_file, "w") as f:
-            yaml.dump(config_data, f)
+        write_yaml(config_file, config_data)
     except Exception as e:
         print("Could not update configuration file flip classifier path")
         print("Unexpected error:", e)
@@ -562,8 +554,7 @@ def convert_raw_to_avi_wrapper(
     vid_info = get_movie_info(input_file, mapping=mapping)
     video_pipe = None
 
-    for batch in batched_video_reader(input_file, n_frames=vid_info["nframes"], batch_size=chunk_size):
-        _, frames = zip(*batch)
+    for (indices, frames) in batched_video_reader(input_file, n_frames=vid_info["nframes"], batch_size=chunk_size):
         video_pipe = write_frames(
             output_file,
             frames,
@@ -576,12 +567,10 @@ def convert_raw_to_avi_wrapper(
     if video_pipe:
         video_pipe.communicate()
 
-    for raw_batch, encoded_batch in zip(
+    for (raw_indices, raw_frames), (encoded_indices, encoded_frames) in zip(
         batched_video_reader(input_file, n_frames=vid_info["nframes"], batch_size=chunk_size),
         batched_video_reader(output_file, n_frames=vid_info["nframes"], batch_size=chunk_size),
     ):
-        _, raw_frames = zip(*raw_batch)
-        _, encoded_frames = zip(*encoded_batch)
         if not np.array_equal(raw_frames, encoded_frames):
             raise RuntimeError("Raw frames and encoded frames not equal")
 
@@ -631,7 +620,7 @@ def copy_slice_wrapper(
         if overwrite != "":
             sys.exit(0)
 
-    for batch in batched_video_reader(
+    for (indices, frames) in batched_video_reader(
         input_file,
         n_frames=copy_slice[1],  # this is the end frame
         batch_size=chunk_size,
@@ -639,7 +628,6 @@ def copy_slice_wrapper(
         frame_size=vid_info["dims"],
         overlap=0,
     ):
-        _, frames = zip(*batch)
         if avi_encode:
             video_pipe = write_frames(
                 output_file,
@@ -651,17 +639,15 @@ def copy_slice_wrapper(
             )
         else:
             with open(output_file, "ab") as f:
-                f.write(np.array(frames).astype("uint16").tobytes())
+                f.write(frames.astype("uint16").tobytes())
 
     if avi_encode and video_pipe:
         video_pipe.communicate()
 
-    for raw_batch, encoded_batch in zip(
+    for (raw_indices, raw_frames), (encoded_indices, encoded_frames) in zip(
         batched_video_reader(input_file, n_frames=copy_slice[1], batch_size=chunk_size, offset=copy_slice[0]),
         batched_video_reader(output_file, n_frames=copy_slice[1] - copy_slice[0], batch_size=chunk_size),
     ):
-        _, raw_frames = zip(*raw_batch)
-        _, encoded_frames = zip(*encoded_batch)
         if not np.array_equal(raw_frames, encoded_frames):
             raise RuntimeError("Raw frames and encoded frames not equal")
 
