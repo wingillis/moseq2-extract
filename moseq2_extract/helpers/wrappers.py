@@ -477,7 +477,7 @@ def extract_wrapper(input_file, output_dir, config_data, num_frames=None, skip=F
 
     # Compress the depth file to avi format; compresses original raw file by ~8x.
     try:
-        if input_file.endswith("dat") and config_data["compress"]:
+        if input_file.suffix == ".dat" and config_data["compress"]:
             convert_raw_to_avi_function(
                 input_file,
                 chunk_size=config_data["compress_chunk_size"],

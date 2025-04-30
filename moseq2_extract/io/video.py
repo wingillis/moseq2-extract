@@ -303,7 +303,7 @@ def get_stream_names(filename, stream_tag="title"):
 
 
 def read_frames(
-    filename,
+    filename: Path,
     frames=range(
         0,
     ),
@@ -364,7 +364,7 @@ def read_frames(
         "-ss",
         start_time,
         "-i",
-        filename,
+        str(filename),
         "-vframes",
         str(len(frames)),
         "-f",
@@ -387,7 +387,7 @@ def read_frames(
         mapping_dict = get_stream_names(filename)
         mapping = mapping_dict.get(mapping, 0)
 
-    if filename.endswith(".avi"):
+    if filename.suffix == ".avi":
         command += ["-map", f"0:{mapping}"]
         command += ["-vsync", "0"]
 
@@ -570,7 +570,7 @@ def batched_video_reader(
 
 
 def load_movie_data(
-    filename, frames=None, frame_size=(512, 424), bit_depth=16, **kwargs
+    filename: Path, frames=None, frame_size=(512, 424), bit_depth=16, **kwargs
 ):
     """
     Parse file extension and load the movie data into numpy array.
@@ -589,7 +589,7 @@ def load_movie_data(
     if isinstance(frames, int):
         frames = [frames]
     try:
-        if filename.lower().endswith(".dat"):
+        if filename.suffix == ".dat":
             frame_data = read_frames_raw(
                 filename,
                 frames=frames,
@@ -597,7 +597,7 @@ def load_movie_data(
                 bit_depth=bit_depth,
                 **kwargs,
             )
-        elif filename.lower().endswith(".avi"):
+        elif filename.suffix == ".avi":
             frame_data = read_frames(filename, frames, frame_size=frame_size, **kwargs)
 
     except AttributeError as e:
@@ -614,13 +614,13 @@ def load_movie_data(
 
 
 def get_movie_info(
-    filename, frame_size=(512, 424), bit_depth=16, mapping="DEPTH", threads=8, **kwargs
+    filename: Path, frame_size=(512, 424), bit_depth=16, mapping="DEPTH", threads=8, **kwargs
 ):
     """
     Return dict of movie metadata.
 
     Args:
-    filename (str): path to video file
+    filename (Path): path to video file
     frame_dims (tuple): video dimensions
     bit_depth (int): integer indicating data type encoding
     mapping (str): the stream to read from mkv files
@@ -631,11 +631,11 @@ def get_movie_info(
     """
 
     try:
-        if filename.lower().endswith(".dat"):
+        if filename.suffix == ".dat":
             metadata = get_raw_info(
                 filename, frame_size=frame_size, bit_depth=bit_depth
             )
-        elif filename.lower().endswith(".avi"):
+        elif filename.suffix == ".avi":
             metadata = get_video_info(
                 filename, mapping=mapping, threads=threads, **kwargs
             )

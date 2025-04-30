@@ -213,7 +213,7 @@ def detect_avi_file(finfo):
 
     return detected
 
-def detect_and_set_camera_parameters(config_data, input_file=None):
+def detect_and_set_camera_parameters(config_data, input_file: Path | None = None):
     """
     Read the camera type and info and set the bg_roi_weights to the precomputed values.
     If camera_type is None, function will assume kinect is used.
@@ -249,9 +249,9 @@ def detect_and_set_camera_parameters(config_data, input_file=None):
     }
 
     if camera_type == 'auto' and input_file is not None:
-        if input_file.endswith('.dat'):
+        if input_file.suffix == ".dat":
             detected = 'kinect'
-        elif input_file.endswith('.avi'):
+        elif input_file.suffix == '.avi':
             if finfo is None:
                 finfo = get_movie_info(input_file,
                                        mapping=config_data.get('mapping', 0),
