@@ -10,7 +10,6 @@ import subprocess
 import numpy as np
 import imageio.v3 as iio
 import matplotlib.pyplot as plt
-from os.path import exists
 from tqdm.auto import tqdm
 from itertools import islice
 from pathlib import Path
@@ -388,7 +387,7 @@ def read_frames(
         mapping_dict = get_stream_names(filename)
         mapping = mapping_dict.get(mapping, 0)
 
-    if filename.endswith((".mkv", ".avi")):
+    if filename.endswith(".avi"):
         command += ["-map", f"0:{mapping}"]
         command += ["-vsync", "0"]
 
@@ -411,65 +410,10 @@ def read_frames(
     return video.astype("uint16")
 
 
-def read_mkv(
-    filename,
-    frames=range(
-        0,
-    ),
-    pixel_format="gray16be",
-    movie_dtype="uint16",
-    frames_is_timestamp=True,
-    timestamps=None,
-    **kwargs,
-):
-    """
-    Read in frames from a .mkv file using a pipe from ffmpeg.
-
-    Args:
-    filename (str): filename to get frames from
-    frames (list or numpy.ndarray): list of frame indices to read
-    pixel_format (str): ffmpeg pixel format of data
-    movie_dtype (str): An indicator for numpy to store the piped ffmpeg-read video in memory for processing.
-    frames_is_timestamp (bool): if False, use machine timestamp if True, use frame as timestamp
-    timestamps (list): array of timestamps to slice into using the frame indices
-    threads (int): number of threads to use for decode
-    fps (int): frame rate of camera in Hz
-    frame_size (str): wxh frame size in pixels
-    frame_dtype (str): indicates the data type to use when reading the videos
-    slices (int): number of slices to use for decode
-    slicecrc (int): check integrity of slices
-    mapping (int): ffmpeg channel mapping; "o:mapping"; chooses the stream to read from mkv files.
-    get_cmd (bool): indicates whether function should return ffmpeg command (instead of executing).
-
-    Returns:
-    video (numpy.ndarray):  frames x rows x columns
-    """
-
-    if timestamps is None and exists(filename):
-        timestamps = load_timestamps_from_movie(
-            filename, mapping=kwargs.get("mapping", "DEPTH")
-        )
-
-    if timestamps is not None:
-        if isinstance(frames, range):
-            frames = timestamps[slice(frames.start, frames.stop, frames.step)]
-        else:
-            frames = [timestamps[frames[0]]]
-
-    return read_frames(
-        filename,
-        frames,
-        pixel_format=pixel_format,
-        movie_dtype=movie_dtype,
-        frames_is_timestamp=frames_is_timestamp,
-        **kwargs,
-    )
-
-
 @contextmanager
 def open_video_writer(filename, fps, depth_min, depth_max, cmap="jet"):
     """
-    Context‐manager for opening a video writer.
+    Context manager for opening a video writer.
     Yields:
       writer: function that writes frames to the video file
     Automatically closes the file on exit.
@@ -653,8 +597,6 @@ def load_movie_data(
                 bit_depth=bit_depth,
                 **kwargs,
             )
-        elif filename.lower().endswith(".mkv"):
-            frame_data = read_mkv(filename, frames, frame_size=frame_size, **kwargs)
         elif filename.lower().endswith(".avi"):
             frame_data = read_frames(filename, frames, frame_size=frame_size, **kwargs)
 
@@ -693,7 +635,7 @@ def get_movie_info(
             metadata = get_raw_info(
                 filename, frame_size=frame_size, bit_depth=bit_depth
             )
-        elif filename.lower().endswith((".avi", ".mkv")):
+        elif filename.lower().endswith(".avi"):
             metadata = get_video_info(
                 filename, mapping=mapping, threads=threads, **kwargs
             )
@@ -702,53 +644,3 @@ def get_movie_info(
         metadata = {}
 
     return metadata
-
-
-def load_timestamps_from_movie(input_file, threads=8, mapping="DEPTH"):
-    """
-    Run a ffprobe command to extract the timestamps from the .mkv file, and pipes the
-    output data to a csv file.
-
-    Args:
-    filename (str): path to input file to extract timestamps from.
-    threads (int): number of threads to simultaneously read timestamps
-    mapping (str): chooses the stream to read from mkv files. (Will default to if video is not an mkv format)
-
-    Returns:
-    timestamps (list): list of float values representing timestamps for each frame.
-    """
-
-    print("Loading movie timestamps")
-
-    if isinstance(mapping, str):
-        mapping_dict = get_stream_names(input_file)
-        mapping = mapping_dict.get(mapping, 0)
-
-    command = [
-        "ffprobe",
-        "-select_streams",
-        f"v:{mapping}",
-        "-threads",
-        str(threads),
-        "-show_entries",
-        "frame=pkt_pts_time",
-        "-v",
-        "quiet",
-        input_file,
-        "-of",
-        "csv=p=0",
-    ]
-
-    ffprobe = subprocess.Popen(command, stderr=subprocess.PIPE, stdout=subprocess.PIPE)
-    out, err = ffprobe.communicate()
-
-    if err:
-        print("Error:", err)
-        return None
-
-    timestamps = [float(t) for t in out.split()]
-
-    if len(timestamps) == 0:
-        return None
-
-    return timestamps

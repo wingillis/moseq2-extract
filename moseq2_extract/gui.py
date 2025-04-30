@@ -272,7 +272,7 @@ def download_flip_command(output_dir, config_file="", selection=1):
 def find_roi_command(
     input_dir,
     config_file,
-    exts=["dat", "mkv", "avi"],
+    exts=["dat", "avi"],
     select_session=False,
     default_session=0,
 ):

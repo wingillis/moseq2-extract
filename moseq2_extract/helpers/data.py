@@ -12,7 +12,6 @@ from ruamel.yaml import YAML
 yaml = YAML(typ='safe', pure=True)
 from tqdm.auto import tqdm
 from cytoolz import keymap
-from moseq2_extract.io.video import load_timestamps_from_movie
 from os.path import exists, join, dirname, basename, splitext
 from moseq2_extract.util import (
     h5_to_dict,
@@ -270,8 +269,6 @@ def handle_extract_metadata(input_file):
     acquisition_metadata (dict): key-value pairs of JSON contents
     timestamps (1D array): list of loaded timestamps
     """
-    alternate_correct = False
-    from_depth_file = False
 
     # Handling non-compressed session paths
     metadata_path = input_file.with_name("metadata.json")
@@ -279,19 +276,11 @@ def handle_extract_metadata(input_file):
     alternate_timestamp_path = input_file.with_name("timestamps.csv")
 
     # Checks for alternative timestamp file if original .txt version does not exist
-    if not timestamp_path.exists() and alternate_timestamp_path.exists():
+    if alternate_correct := (not timestamp_path.exists() and alternate_timestamp_path.exists()):
         timestamp_path = alternate_timestamp_path
-        alternate_correct = True
-    elif not (
-        timestamp_path.exists() or alternate_timestamp_path.exists()
-    ) and input_file.suffix == ".mkv":
-        from_depth_file = True
 
     acquisition_metadata = load_metadata(metadata_path)
-    if not from_depth_file:
-        timestamps = load_timestamps(timestamp_path, col=0, alternate=alternate_correct)
-    else:
-        timestamps = load_timestamps_from_movie(input_file)
+    timestamps = load_timestamps(timestamp_path, col=0, alternate=alternate_correct)
 
     return acquisition_metadata, timestamps
 

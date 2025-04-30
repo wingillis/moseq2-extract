@@ -251,8 +251,6 @@ def detect_and_set_camera_parameters(config_data, input_file=None):
     if camera_type == 'auto' and input_file is not None:
         if input_file.endswith('.dat'):
             detected = 'kinect'
-        elif input_file.endswith('.mkv'):
-            detected = 'azure'
         elif input_file.endswith('.avi'):
             if finfo is None:
                 finfo = get_movie_info(input_file,
@@ -393,7 +391,7 @@ def convert_pxs_to_mm(coords, resolution=(512, 424), field_of_view=(70.6, 60), t
 
 def convert_raw_to_avi_function(input_file, chunk_size=2000, fps=30, delete=False, threads=3):
     """
-    Compress depth file (.dat, '.mkv') to avi file.
+    Compress depth .dat file to avi file.
 
     Args:
     input_file (str): path to depth file

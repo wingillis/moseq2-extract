@@ -231,9 +231,6 @@ class GUITests(TestCase):
         with open(config_data["session_config_path"], "w") as f:
             yaml.dump(session_config, f)
 
-        mkv_path = "data/azure_test/nfov_test.mkv"
-        ret = extract_command(mkv_path, None, configfile, skip=False, num_frames=60)
-
         out_dir = "data/azure_test/proc/"
         h5file = os.path.join(out_dir, "results_00.h5")
 

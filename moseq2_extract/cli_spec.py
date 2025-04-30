@@ -378,7 +378,7 @@ EXTRACT_OPTIONS = [
         {
             "default": "gray16le",
             "type": str,
-            "help": "Pixel format for reading in .avi and .mkv videos",
+            "help": "Pixel format for reading in .avi videos",
         },
     ),
     (

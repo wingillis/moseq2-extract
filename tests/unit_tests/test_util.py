@@ -67,9 +67,6 @@ class TestExtractUtils(TestCase):
         assert new_config_data["bg_roi_weights"] == (1, 0.1, 1)
 
         test_config_data["camera_type"] = "auto"
-        new_config_data = detect_and_set_camera_parameters(
-            test_config_data, "data/azure_test/nfov_test.mkv"
-        )
 
         assert new_config_data["bg_roi_weights"] == (10, 0.1, 1)
 
