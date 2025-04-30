@@ -14,7 +14,7 @@ from moseq2_extract.util import read_yaml
 from moseq2_extract.extract.extract import extract_chunk
 from moseq2_extract.helpers.data import check_completion_status
 from moseq2_extract.helpers.parameters import MouseProcessing
-from moseq2_extract.io.video import load_movie_data, write_frames_preview, open_video_writer, batched_video_reader
+from moseq2_extract.io.video import write_frames_preview, open_video_writer, batched_video_reader
 
 
 def write_extracted_chunk_to_h5(
@@ -124,7 +124,6 @@ def process_extract_batches(
     config_data,
     bground_im,
     roi,
-    frame_batches,
     output_mov_path,
     scalars=None,
     h5_file=None,
@@ -175,9 +174,6 @@ def process_extract_batches(
             # for i, frame_range in enumerate(tqdm(frame_batches, desc="Processing batches")):
             frame_range, raw_chunk = zip(*batch)
             frame_range = np.array(frame_range)
-            # raw_chunk = load_movie_data(
-            #     input_file, frame_range, frame_size=bground_im.shape[::-1], **config_data
-            # )
 
             offset = config_data["chunk_overlap"] if i > 0 else 0
 

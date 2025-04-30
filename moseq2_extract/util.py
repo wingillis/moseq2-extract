@@ -643,6 +643,21 @@ def read_yaml(yaml_file):
 
     with open(yaml_file, 'r') as f:
         return yaml.load(f)
+    
+
+def write_yaml(yaml_file, data: dict):
+    """
+    Write a dictionary to a yaml file.
+
+    Args:
+    yaml_file (str): path to yaml file
+    data (dict): dict of data to write to yaml file
+    """
+
+    yaml = YAML(typ='safe', pure=True)
+    with open(yaml_file, 'w') as f:
+        yaml.dump(data, f)
+
 
 def mouse_threshold_filter(h5file, thresh=0):
     """

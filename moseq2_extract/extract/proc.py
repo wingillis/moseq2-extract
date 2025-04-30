@@ -16,7 +16,7 @@ from moseq2_extract.extract.roi import plane_ransac
 from moseq2_extract.io.image import read_tiff, write_tiff
 from moseq2_extract.util import convert_pxs_to_mm, strided_app
 from moseq2_extract.helpers.parameters import MouseProcessing, ArenaParams
-from moseq2_extract.io.video import read_avi_frame_indices, load_movie_data, get_movie_info
+from moseq2_extract.io.video import get_movie_info, indexed_video_sequence
 
 
 def get_flips(frames, flip_file=None, smoothing=None):
@@ -104,54 +104,56 @@ def get_bground_im_file(frames_file: str | Path, frame_stride=250, med_scale=5, 
         output_dir = frames_file.parent / 'proc'
     
     bground_path = Path(output_dir) / 'bground.tiff'
+    first_frame_path = Path(output_dir) / 'first_frame.tiff'
 
     kwargs = deepcopy(kwargs)
 
-    # Compute background image if it doesn't exist. Otherwise, load from file
-    if not bground_path.exists() or kwargs.get('recompute_bg', False):
-        if (finfo := kwargs.pop("finfo", None)) is None:
-            finfo = get_movie_info(frames_file, **kwargs)
+    # Load background image it exists. Otherwise, compute
+    if bground_path.exists() and not kwargs.get('recompute_bg', False):
+        return read_tiff(bground_path, scale=True), read_tiff(first_frame_path, scale=True)
 
-        frame_idx = np.arange(0, finfo['nframes'], frame_stride)
-        frame_store = []
-        if frames_file.suffix == ".avi":
-            frame_store = [cv2.medianBlur(frame, med_scale) for frame in read_avi_frame_indices(frames_file, frame_idx)]
-        else:
-            for i, frame in enumerate(frame_idx):
-                frs = load_movie_data(frames_file, [int(frame)], frame_size=finfo['dims'], 
-                                                            finfo=finfo, **kwargs).squeeze()
-                frame_store.append(cv2.medianBlur(frs, med_scale))
+    if (finfo := kwargs.pop("finfo", None)) is None:
+        finfo = get_movie_info(frames_file, **kwargs)
+
+    finfo["dtype"] = kwargs['movie_dtype']
+
+    frame_idx = np.arange(0, finfo['nframes'], frame_stride)
+    frame_store = []
+    for i, frame in enumerate(indexed_video_sequence(frames_file, frame_idx, finfo=finfo)):
+        if i == 0:
+            first_frame = frame.copy()
         
-        frame_store = np.array(frame_store).astype('float32')
+        frame_store.append(cv2.medianBlur(frame, med_scale))
+    
+    frame_store = np.array(frame_store).astype('float32')
 
-        if kwargs.get("bg_v2", False):
-            # run an optimization to determine the smoothest quantile to sample from
+    if kwargs.get("bg_v2", False):
+        # run an optimization to determine the smoothest quantile to sample from
 
-            # get rid of zeros
-            frame_store[frame_store == 0] = np.nan
+        # get rid of zeros
+        frame_store[frame_store == 0] = np.nan
 
-            smooth_outputs = {}
-            for q in np.arange(0.5, 1.0, 0.1):
-                bground = np.nanquantile(frame_store, q, axis=0)
-                gx = cv2.Sobel(bground, cv2.CV_64F, 1, 0, ksize=5)
-                gy = cv2.Sobel(bground, cv2.CV_64F, 0, 1, ksize=5)
-                gmag = cv2.magnitude(gx, gy)
-                smooth_outputs[q] = np.nanmean(gmag)
-            # get key for max smoothness
-            q = min(smooth_outputs, key=smooth_outputs.get)
+        smooth_outputs = {}
+        for q in np.arange(0.5, 1.0, 0.1):
             bground = np.nanquantile(frame_store, q, axis=0)
+            gx = cv2.Sobel(bground, cv2.CV_64F, 1, 0, ksize=5)
+            gy = cv2.Sobel(bground, cv2.CV_64F, 0, 1, ksize=5)
+            gmag = cv2.magnitude(gx, gy)
+            smooth_outputs[q] = np.nanmean(gmag)
+        # get key for max smoothness
+        q = min(smooth_outputs, key=smooth_outputs.get)
+        bground = np.nanquantile(frame_store, q, axis=0)
 
-        else:
-            bground = np.nanmedian(frame_store, axis=0)
-
-        # add zeros back
-        bground = np.nan_to_num(bground)
-
-        write_tiff(bground_path, bground, scale=True)
     else:
-        bground = read_tiff(bground_path, scale=True)
+        bground = np.nanmedian(frame_store, axis=0)
+
+    # add zeros back
+    bground = np.nan_to_num(bground)
+
+    write_tiff(bground_path, bground, scale=True)
+    write_tiff(first_frame_path, first_frame, scale=True)
         
-    return bground
+    return bground, first_frame
 
 
 def get_bbox(roi):

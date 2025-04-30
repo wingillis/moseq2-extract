@@ -16,7 +16,7 @@ from pathlib import Path
 from cytoolz import partition_all
 from collections import deque
 from contextlib import contextmanager
-from typing import BinaryIO, Iterator
+from typing import BinaryIO, Iterator, Any
 
 @contextmanager
 def _open_raw_source(src: str) -> Iterator[tuple[BinaryIO, int]]:
@@ -63,7 +63,7 @@ def get_raw_info(filename, bit_depth=16, frame_size=(512, 424)):
     return file_info
 
 
-def read_frames_raw(
+def read_frames_raw_old(
     filename,
     frames=None,
     frame_size=(512, 424),
@@ -107,6 +107,45 @@ def read_frames_raw(
         ).reshape(dims)
 
     return chunk
+
+
+def read_frames_raw(
+    file_name: Path,
+    frame_indices: list | np.ndarray | None = None,
+    frame_size: tuple = (512, 424),
+    movie_dtype="<u2",
+) -> Iterator[np.ndarray]:
+    data = np.memmap(
+        file_name, dtype=np.dtype(movie_dtype), mode="r", shape=(-1, frame_size[1], frame_size[0])
+    )
+
+    if frame_indices is None:
+        frame_indices = range(data.shape[0])
+    
+    for idx in frame_indices:
+        yield data[idx]
+
+
+def get_avi_metadata(path: Path) -> int:
+    # TODO: tested with original depth.avi files, need to test with orbbec avi files
+    with av.open(path, 'r') as container:
+        video_stream = container.streams.video[0]
+        # get width, height
+        width = video_stream.width
+        height = video_stream.height
+
+        # try the container‐reported frame count first
+        n = video_stream.frames
+        if n == 0:
+            print("Warning: container frame count is 0, trying to decode and count frames instead.")
+            # fallback: decode & count
+            n = sum(1 for _ in container.decode(video_stream))
+    return {
+        "nframes": n,
+        "dims": (width, height),
+        "fps": video_stream.average_rate,
+        "bytes": width * height * 2 * n,  # each pixel is 2 bytes
+    }
 
 
 # https://gist.github.com/hiwonjoon/035a1ead72a767add4b87afe03d0dd7b
@@ -304,9 +343,7 @@ def get_stream_names(filename, stream_tag="title"):
 
 def read_frames(
     filename: Path,
-    frames=range(
-        0,
-    ),
+    frames=range(0),
     threads=6,
     fps=30,
     frames_is_timestamp=False,
@@ -476,17 +513,43 @@ def read_avi_frame_range(path, *indices):
     return frames
 
 
-def read_avi_frame_indices(path, indices: list[int]):
-    for i, frame in enumerate(avi_reader(path)):
-        if i in indices:
-            yield frame
-
-
 def avi_reader(path) -> Iterator[np.ndarray]:
     with av.open(path, "r") as reader:
         reader.streams.video[0].thread_type = "AUTO"
         for frame in reader.decode(video=0):
             yield frame.to_ndarray()
+
+
+def avi_video_sequence(file_path: Path, indices: np.ndarray) -> Iterator[np.ndarray]:
+    with av.open(file_path) as container:
+        stream = container.streams.video[0]
+
+        for index in indices:
+            # compute timestamp in seconds for the nth frame
+            frame_rate = float(stream.average_rate)
+            time_s = index / frame_rate
+
+            # convert to stream.time_base units (pts)
+            target_pts = int(time_s / float(stream.time_base))
+
+            # seek to the closest keyframe at or before the target pts
+            container.seek(target_pts, any_frame=False, backward=True, stream=stream)
+            frame = next(container.decode(stream))
+            yield frame.to_ndarray()
+
+
+def indexed_video_sequence(
+    file_path: Path, indices: np.ndarray, finfo: dict | None = None
+) -> Iterator[np.ndarray]:
+    """Selects the appropriate iterator based on the file extension."""
+    if file_path.suffix == ".avi":
+        return avi_video_sequence(file_path, indices)
+    elif file_path.suffix == ".dat":
+        if finfo is None:
+            raise ValueError("dat_vid_params must be provided for .dat files")
+        # dat_vid_params should contain frame_size and movie_dtype
+        return read_frames_raw(file_path, indices, frame_size=finfo["dims"], movie_dtype=finfo["dtype"])
+
 
 def gen_batch_sequence(nframes, chunk_size, overlap, offset=0):
     """
@@ -541,7 +604,7 @@ def batched_video_reader(
                 yield idx, frame
 
             start = offset + batch_size
-            # slide by unique frames 
+            # slide by unique frames
             for indices in partition_all(unique, range(start, n_frames)):
 
                 # yield the overlapping frames first
@@ -557,90 +620,50 @@ def batched_video_reader(
                     buf.append(frame)
                     idx_buf.append(idx)
                     yield idx, frame
-            
+
         reader = batched_avi_reader()
     elif filename.suffix == ".dat":
+
         def batched_dat_reader():
+            frame_batches = gen_batch_sequence(
+                nframes=n_frames, chunk_size=batch_size, overlap=overlap, offset=offset
+            )
             for batch in frame_batches:
-                for i, frame in zip(batch, read_frames_raw(filename, frames=batch, frame_size=frame_size, bit_depth=bit_depth, **kwargs)):
+                for i, frame in zip(
+                    batch,
+                    read_frames_raw(
+                        filename, frames=batch, frame_size=frame_size, bit_depth=bit_depth, **kwargs
+                    ),
+                ):
                     yield i, frame
+
         reader = batched_dat_reader()
 
     return partition_all(batch_size, reader)
 
 
-def load_movie_data(
-    filename: Path, frames=None, frame_size=(512, 424), bit_depth=16, **kwargs
-):
-    """
-    Parse file extension and load the movie data into numpy array.
-
-    Args:
-    filename (str): Path to video.
-    frames (int or list): Frame indices to read in to output array.
-    frame_size (tuple): Video dimensions (nrows, ncols)
-    bit_depth (int): Number of bits per pixel, corresponds to image resolution.
-    kwargs (dict): Any additional parameters that could be required in read_frames_raw().
-
-    Returns:
-    frame_data (numpy.ndarray): Read video as numpy array. (nframes, nrows, ncols)
-    """
-
-    if isinstance(frames, int):
-        frames = [frames]
-    try:
-        if filename.suffix == ".dat":
-            frame_data = read_frames_raw(
-                filename,
-                frames=frames,
-                frame_size=frame_size,
-                bit_depth=bit_depth,
-                **kwargs,
-            )
-        elif filename.suffix == ".avi":
-            frame_data = read_frames(filename, frames, frame_size=frame_size, **kwargs)
-
-    except AttributeError as e:
-        print("Error reading movie:", e)
-        frame_data = read_frames_raw(
-            filename,
-            frames=frames,
-            frame_size=frame_size,
-            bit_depth=bit_depth,
-            **kwargs,
-        )
-
-    return frame_data
-
-
 def get_movie_info(
-    filename: Path, frame_size=(512, 424), bit_depth=16, mapping="DEPTH", threads=8, **kwargs
-):
+    filename: Path, frame_size: tuple[int, int] = (512, 424), bit_depth: int = 16, **kwargs
+) -> dict[str, Any]:
     """
     Return dict of movie metadata.
 
     Args:
     filename (Path): path to video file
-    frame_dims (tuple): video dimensions
+    frame_size (tuple): video dimensions
     bit_depth (int): integer indicating data type encoding
-    mapping (str): the stream to read from mkv files
-    threads (int): number of threads to simultaneously read timestamps stored within the raw data file.
 
     Returns:
     metadata (dict): dictionary containing video file metadata
     """
 
-    try:
-        if filename.suffix == ".dat":
-            metadata = get_raw_info(
-                filename, frame_size=frame_size, bit_depth=bit_depth
-            )
-        elif filename.suffix == ".avi":
-            metadata = get_video_info(
-                filename, mapping=mapping, threads=threads, **kwargs
-            )
-    except AttributeError as e:
-        print("Error reading movie metadata:", e)
-        metadata = {}
+    if filename.suffix == ".dat":
+        metadata = get_raw_info(
+            filename, frame_size=frame_size, bit_depth=bit_depth
+        )
+    elif filename.suffix == ".avi":
+        metadata = get_avi_metadata(filename)
+    else:
+        raise ValueError("Unsupported file type. Supported types are .avi and .dat")
 
     return metadata

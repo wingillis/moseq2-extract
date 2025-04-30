@@ -22,7 +22,7 @@ from moseq2_extract.io.image import write_tiff
 from moseq2_extract.helpers.extract import process_extract_batches
 from moseq2_extract.extract.proc import get_roi, get_bground_im_file
 from os.path import join, exists, dirname, basename, abspath, splitext
-from moseq2_extract.io.video import load_movie_data, get_movie_info, write_frames
+from moseq2_extract.io.video import get_movie_info, write_frames, batched_video_reader
 from moseq2_extract.util import mouse_threshold_filter, filter_warnings, read_yaml
 from moseq2_extract.helpers.data import (
     handle_extract_metadata,
@@ -259,8 +259,7 @@ def get_roi_wrapper(input_file, config_data, output_dir=None):
     config_data = detect_and_set_camera_parameters(config_data, input_file)
 
     print("Getting background...")
-    bground_im = get_bground_im_file(input_file, **config_data)
-    write_tiff(join(output_dir, "bground.tiff"), bground_im, scale=True)
+    bground_im, first_frame = get_bground_im_file(input_file, **config_data)
 
     # readjust depth range
     if not config_data.get("manual_set_depth_range", False):
@@ -281,17 +280,6 @@ def get_roi_wrapper(input_file, config_data, output_dir=None):
         arena_params.bg_roi_depth_range = (
             adjusted_bg_depth_range - 50, adjusted_bg_depth_range + 50
         )
-
-    # pass in config_data['finfo']['dims'] for frame size otherwise frame size is hard coded to 512x424
-    first_frame = load_movie_data(
-        input_file, 0, frame_size=config_data["finfo"]["dims"], **config_data
-    )
-    write_tiff(
-        join(output_dir, "first_frame.tiff"),
-        first_frame,
-        scale=True,
-        scale_factor=arena_params.bg_roi_depth_range,
-    )
 
     print("Getting roi...")
 
@@ -392,14 +380,6 @@ def extract_wrapper(input_file, output_dir, config_data, num_frames=None, skip=F
 
     scalars = list(SCALAR_ATTRIBUTES)
 
-    # Get frame chunks to extract
-    frame_batches = gen_batch_sequence(
-        last_frame_idx,
-        config_data["chunk_size"],
-        config_data["chunk_overlap"],
-        offset=first_frame_idx,
-    )
-
     # set up the output directory
     if output_dir is None:
         output_dir = input_file.parent / "proc"
@@ -446,7 +426,6 @@ def extract_wrapper(input_file, output_dir, config_data, num_frames=None, skip=F
         "first_frame_idx": first_frame_idx,
         "last_frame_idx": last_frame_idx,
         "nframes": total_frames,
-        "frame_batches": frame_batches,
     }
 
     # farm out the batches and write to an hdf5 file
@@ -581,11 +560,10 @@ def convert_raw_to_avi_wrapper(
         output_file = join(dirname(input_file), f"{base_filename}.avi")
 
     vid_info = get_movie_info(input_file, mapping=mapping)
-    frame_batches = gen_batch_sequence(vid_info["nframes"], chunk_size, 0)
     video_pipe = None
 
-    for batch in tqdm(frame_batches, desc="Encoding batches"):
-        frames = load_movie_data(input_file, batch, mapping=mapping)
+    for batch in batched_video_reader(input_file, n_frames=vid_info["nframes"], batch_size=chunk_size):
+        _, frames = zip(*batch)
         video_pipe = write_frames(
             output_file,
             frames,
@@ -598,14 +576,14 @@ def convert_raw_to_avi_wrapper(
     if video_pipe:
         video_pipe.communicate()
 
-    for batch in tqdm(frame_batches, desc="Checking data integrity"):
-        raw_frames = load_movie_data(input_file, batch, mapping=mapping)
-        encoded_frames = load_movie_data(output_file, batch, mapping=mapping)
-
+    for raw_batch, encoded_batch in zip(
+        batched_video_reader(input_file, n_frames=vid_info["nframes"], batch_size=chunk_size),
+        batched_video_reader(output_file, n_frames=vid_info["nframes"], batch_size=chunk_size),
+    ):
+        _, raw_frames = zip(*raw_batch)
+        _, encoded_frames = zip(*encoded_batch)
         if not np.array_equal(raw_frames, encoded_frames):
-            raise RuntimeError(
-                f"Raw frames and encoded frames not equal from {batch[0]} to {batch[-1]}"
-            )
+            raise RuntimeError("Raw frames and encoded frames not equal")
 
     print("Encoding successful")
 
@@ -638,18 +616,12 @@ def copy_slice_wrapper(
         avi_encode = True
         output_file = join(dirname(input_file), f"{base_filename}.avi")
     else:
-        output_filename, ext = splitext(basename(output_file))
-        if ext == ".avi":
-            avi_encode = True
-        else:
-            avi_encode = False
+        _, ext = splitext(basename(output_file))
+        avi_encode = ext == ".avi"
 
     vid_info = get_movie_info(input_file)
     copy_slice = (copy_slice[0], np.minimum(copy_slice[1], vid_info["nframes"]))
-    nframes = copy_slice[1] - copy_slice[0]
-    offset = copy_slice[0]
 
-    frame_batches = gen_batch_sequence(nframes, chunk_size, 0, offset)
     video_pipe = None
 
     if exists(output_file):
@@ -659,8 +631,15 @@ def copy_slice_wrapper(
         if overwrite != "":
             sys.exit(0)
 
-    for batch in tqdm(frame_batches, desc="Encoding batches"):
-        frames = load_movie_data(input_file, batch, mapping=mapping)
+    for batch in batched_video_reader(
+        input_file,
+        n_frames=copy_slice[1],  # this is the end frame
+        batch_size=chunk_size,
+        offset=copy_slice[0],
+        frame_size=vid_info["dims"],
+        overlap=0,
+    ):
+        _, frames = zip(*batch)
         if avi_encode:
             video_pipe = write_frames(
                 output_file,
@@ -672,19 +651,19 @@ def copy_slice_wrapper(
             )
         else:
             with open(output_file, "ab") as f:
-                f.write(frames.astype("uint16").tobytes())
+                f.write(np.array(frames).astype("uint16").tobytes())
 
     if avi_encode and video_pipe:
         video_pipe.communicate()
 
-    for batch in tqdm(frame_batches, desc="Checking data integrity"):
-        raw_frames = load_movie_data(input_file, batch, mapping=mapping)
-        encoded_frames = load_movie_data(output_file, batch, mapping=mapping)
-
+    for raw_batch, encoded_batch in zip(
+        batched_video_reader(input_file, n_frames=copy_slice[1], batch_size=chunk_size, offset=copy_slice[0]),
+        batched_video_reader(output_file, n_frames=copy_slice[1] - copy_slice[0], batch_size=chunk_size),
+    ):
+        _, raw_frames = zip(*raw_batch)
+        _, encoded_frames = zip(*encoded_batch)
         if not np.array_equal(raw_frames, encoded_frames):
-            raise RuntimeError(
-                f"Raw frames and encoded frames not equal from {batch[0]} to {batch[-1]}"
-            )
+            raise RuntimeError("Raw frames and encoded frames not equal")
 
     print("Encoding successful")
 
