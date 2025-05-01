@@ -2,24 +2,21 @@
 Wrapper functions for data processing in extraction.
 """
 
-import os
 import sys
 import uuid
 import h5py
 import shutil
 import warnings
-from glob import glob
 import numpy as np
 import urllib.request
 from pathlib import Path
 from copy import deepcopy
 from tqdm.auto import tqdm
 from cytoolz import partial, keyfilter, dissoc
-from moseq2_extract.helpers.parameters import MouseProcessing, ArenaParams
 from moseq2_extract.io.image import write_tiff
 from moseq2_extract.helpers.extract import process_extract_batches
 from moseq2_extract.extract.proc import get_roi, get_bground_im_file
-from os.path import join, exists, dirname, basename, abspath, splitext
+from moseq2_extract.helpers.parameters import MouseProcessing, ArenaParams
 from moseq2_extract.io.video import get_movie_info, write_frames, batched_video_reader
 from moseq2_extract.util import mouse_threshold_filter, filter_warnings, read_yaml, write_yaml
 from moseq2_extract.helpers.data import (
@@ -69,7 +66,7 @@ def copy_h5_metadata_to_yaml_wrapper(input_dir, h5_metadata_path):
             tmp = clean_dict(h5_to_dict(f, h5_metadata_path))
             tup[0]["metadata"] = dict(tmp)
 
-        new_file = f"{basename(tup[1])}_update.yaml"
+        new_file = f"{Path(tup[1]).stem}_update.yaml"
         write_yaml(new_file, tup[0])
 
         if new_file != tup[1]:
@@ -94,7 +91,8 @@ def generate_index_wrapper(input_dir, output_file):
     h5s, dicts, yamls = recursive_find_h5s(input_dir)
 
     file_with_uuids = [
-        (abspath(h5), abspath(yml), meta) for h5, yml, meta in zip(h5s, yamls, dicts)
+        (str(Path(h5).resolve()), str(Path(yml).resolve()), meta)
+        for h5, yml, meta in zip(h5s, yamls, dicts)
     ]
 
     # Ensuring all retrieved extracted session h5s have the appropriate metadata
@@ -135,11 +133,18 @@ def aggregate_extract_results_wrapper(
     Returns:
     indexpath (str): path to generated index file including all aggregated session information.
     """
+    input_dir = Path(input_dir)
+    output_dir = Path(output_dir)
 
     h5s, dicts, _ = recursive_find_h5s(input_dir)
 
-    not_in_output = lambda f: not exists(join(output_dir, basename(f)))
-    complete = lambda d: d["complete"] and not d["skip"]
+    def not_in_output(f: Path):
+        """check if the file is already in the output directory"""
+        return not (output_dir / f.name).exists()
+
+    def complete(d: dict):
+        """check if the extraction was complete and skip flag not set"""
+        return d["complete"] and not d["skip"]
 
     # only include real extracted mice with this filter func
     mtf = partial(mouse_threshold_filter, thresh=mouse_threshold)
@@ -166,7 +171,7 @@ def aggregate_extract_results_wrapper(
 
     print("Results successfully aggregated in", output_dir)
 
-    indexpath = generate_index_wrapper(output_dir, join(input_dir, "moseq2-index.yaml"))
+    indexpath = generate_index_wrapper(output_dir, Path(input_dir, "moseq2-index.yaml"))
 
     print(f"Index file path: {indexpath}")
     return indexpath
@@ -179,38 +184,30 @@ def generate_index_from_agg_res_wrapper(input_dir):
     Args:
     input_dir (str): path to aggregated results folder
     """
+    input_dir = Path(input_dir)
 
-    # find the yaml files
-    yaml_paths = glob(os.path.join(input_dir, "*.yaml"))
     # setup pca path
-    pca_path = os.path.join(os.path.dirname(input_dir), "_pca", "pca_scores.h5")
-    if os.path.exists(pca_path):
-        # point pca_path to pca scores you have
-        index_data = {
-            "files": [],
-            "pca_path": pca_path,
-        }
-    else:
-        index_data = {
-            "files": [],
-            "pca_path": "",
-        }
+    pca_path = input_dir.parent / "_pca" / "pca_scores.h5"
+    index_data = {
+        "files": [],
+        "pca_path": "",
+    }
+    if pca_path.exists():
+        # point pca_path to existing pca scores
+        index_data["pca_path"] = str(pca_path)
 
-    for p in yaml_paths:
+    for p in input_dir.rglob("*.yaml"):
         temp_yaml = read_yaml(p)
         file_dict = {
             "group": "default",
             "metadata": temp_yaml["metadata"],
-            "path": [p[:-4] + "h5", p],
+            "path": [str(p.with_suffix(".h5")), str(p)],
             "uuid": temp_yaml["uuid"],
         }
         index_data["files"].append(file_dict)
 
-    # find output filename
-    output_file = os.path.join(os.path.dirname(input_dir), "moseq2-index.yaml")
-
     # write out index yaml
-    write_yaml(output_file, index_data)
+    write_yaml(input_dir.parent / "moseq2-index.yaml", index_data)
 
 
 def get_roi_wrapper(input_file, config_data, output_dir=None):
@@ -227,6 +224,7 @@ def get_roi_wrapper(input_file, config_data, output_dir=None):
     bground_im (numpy.ndarray): Background image to plot in GUI
     first_frame (numpy.ndarray): First frame image to plot in GUI
     """
+    input_file = Path(input_file)
 
     # create ArenaParams object
     filtered_params = keyfilter(
@@ -236,13 +234,13 @@ def get_roi_wrapper(input_file, config_data, output_dir=None):
     config_data = dissoc(config_data, *filtered_params.keys())
 
     if output_dir is None:
-        output_dir = join(dirname(input_file), "proc")
-    elif exists(output_dir):
-        pass
-    elif dirname(output_dir) == "" or dirname(output_dir) not in input_file:
-        output_dir = join(dirname(input_file), output_dir)
+        output_dir = input_file.parent / "proc"
+    elif len(Path(output_dir).parts) == 1 or Path(output_dir).parent not in input_file:
+        output_dir = Path(input_file).parent / output_dir
+    else:
+        output_dir = Path(output_dir)
 
-    os.makedirs(output_dir, exist_ok=True)
+    output_dir.mkdir(parents=True, exist_ok=True)
     config_data["output_dir"] = output_dir
 
     if config_data.get("finfo") is None:
@@ -302,7 +300,7 @@ def get_roi_wrapper(input_file, config_data, output_dir=None):
     roi = rois[arena_params.bg_roi_index]
 
     roi_filename = f"roi_{arena_params.bg_roi_index:02d}.tiff"
-    write_tiff(join(output_dir, roi_filename), roi, scale=True)
+    write_tiff(output_dir / roi_filename, roi, scale=True)
 
     return roi, bground_im, first_frame
 
@@ -521,7 +519,7 @@ def flip_file_wrapper(config_file, output_dir, selected_flip=None):
     # TODO: update for toml file instead of yaml
     try:
         config_data = read_yaml(config_file)
-        config_data["flip_classifier"] = output_filename
+        config_data["flip_classifier"] = str(output_filename)
 
         write_yaml(config_file, config_data)
     except Exception as e:
@@ -530,7 +528,7 @@ def flip_file_wrapper(config_file, output_dir, selected_flip=None):
 
 
 def convert_raw_to_avi_wrapper(
-    input_file, output_file, chunk_size, fps, delete, threads, mapping
+    input_file, output_file, chunk_size, fps, delete
 ):
     """
     compress a raw depth file into an avi file (with depth values) that is 8x smaller.
@@ -541,26 +539,22 @@ def convert_raw_to_avi_wrapper(
     chunk_size (int): Size of frame chunks to iteratively process
     fps (int): frame rate.
     delete (bool): Delete the original depth file if True.
-    threads (int): Number of threads used to encode video.
-    mapping (str or int): Indicate which video stream to from the inputted file
-
-    Returns:
     """
+    input_file = Path(input_file)
 
     if output_file is None:
-        base_filename = splitext(basename(input_file))[0]
-        output_file = join(dirname(input_file), f"{base_filename}.avi")
+        output_file = input_file.with_suffix(".avi")
 
-    vid_info = get_movie_info(input_file, mapping=mapping)
+    vid_info = get_movie_info(input_file)
     video_pipe = None
 
+    # TODO: replace with pyav solution
     for (indices, frames) in batched_video_reader(input_file, n_frames=vid_info["nframes"], batch_size=chunk_size):
         video_pipe = write_frames(
             output_file,
             frames,
             pipe=video_pipe,
             close_pipe=False,
-            threads=threads,
             fps=fps,
         )
 
@@ -578,7 +572,7 @@ def convert_raw_to_avi_wrapper(
 
     if delete:
         print("Deleting", input_file)
-        os.remove(input_file)
+        input_file.unlink()
 
 
 def copy_slice_wrapper(
@@ -599,21 +593,21 @@ def copy_slice_wrapper(
 
     Returns:
     """
+    input_file = Path(input_file)
 
     if output_file is None:
-        base_filename = splitext(basename(input_file))[0]
         avi_encode = True
-        output_file = join(dirname(input_file), f"{base_filename}.avi")
+        output_file = input_file.with_suffix(".avi")
     else:
-        _, ext = splitext(basename(output_file))
-        avi_encode = ext == ".avi"
+        output_file = Path(output_file)
+        avi_encode = output_file.suffix == ".avi"
 
     vid_info = get_movie_info(input_file)
-    copy_slice = (copy_slice[0], np.minimum(copy_slice[1], vid_info["nframes"]))
+    copy_slice = (copy_slice[0], min(copy_slice[1], vid_info["nframes"]))
 
     video_pipe = None
 
-    if exists(output_file):
+    if output_file.exists():
         overwrite = input(
             "Press ENTER to overwrite your previous extraction, else to end the process."
         )
@@ -655,4 +649,4 @@ def copy_slice_wrapper(
 
     if delete:
         print("Deleting", input_file)
-        os.remove(input_file)
+        input_file.unlink()

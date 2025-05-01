@@ -5,13 +5,12 @@ Extraction-helper utility functions.
 import subprocess
 import numpy as np
 from math import ceil
-from os import system
 from pathlib import Path
 from tqdm.auto import tqdm
 from moseq2_extract.util import read_yaml, write_yaml
 from moseq2_extract.extract.extract import extract_chunk
-from moseq2_extract.helpers.data import check_completion_status
 from moseq2_extract.helpers.parameters import MouseProcessing
+from moseq2_extract.helpers.data import check_completion_status
 from moseq2_extract.io.video import write_frames_preview, open_video_writer, batched_video_reader
 
 
@@ -285,4 +284,3 @@ def run_slurm_extract(input_dir, to_extract, config_data, skip_extracted=False):
     if config_data["run_cmd"]:
         print("Running extract commands")
         subprocess.run(commands, shell=True, check=True)
-        # system(commands)

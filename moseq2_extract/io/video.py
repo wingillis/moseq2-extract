@@ -27,8 +27,8 @@ def _open_raw_source(src: str) -> Iterator[tuple[BinaryIO, int]]:
     """
     f = None
     try:
-        f = open(src, "rb")
         size = os.stat(src).st_size
+        f = open(src, "rb")
         yield f, size
     finally:
         if f is not None:

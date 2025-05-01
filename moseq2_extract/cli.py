@@ -326,12 +326,10 @@ def convert_raw_to_avi(
     chunk_size,
     fps,
     delete,
-    threads,
-    mapping,
 ):
 
     convert_raw_to_avi_wrapper(
-        input_file, output_file, chunk_size, fps, delete, threads, mapping
+        input_file, output_file, chunk_size, fps, delete
     )
 
 
@@ -355,12 +353,10 @@ def copy_slice(
     chunk_size,
     fps,
     delete,
-    threads,
-    mapping,
 ):
 
     copy_slice_wrapper(
-        input_file, output_file, copy_slice, chunk_size, fps, delete, threads, mapping
+        input_file, output_file, copy_slice, chunk_size, fps, delete
     )
 
 

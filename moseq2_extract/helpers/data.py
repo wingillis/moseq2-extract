@@ -2,7 +2,6 @@
 Contains helper functions for handling/storing data during extraction.
 """
 
-import os
 import h5py
 import shutil
 import warnings
@@ -11,7 +10,6 @@ import moseq2_extract
 from pathlib import Path
 from tqdm.auto import tqdm
 from cytoolz import keymap, dissoc
-from os.path import exists, join, dirname, basename, splitext
 from moseq2_extract.util import (
     h5_to_dict,
     load_timestamps,
@@ -117,8 +115,8 @@ def load_extraction_meta_from_h5s(to_load, snake_case=True):
             tmp = keymap(camel_to_snake, tmp)
 
         # Specific use case block: Behavior reinforcement experiments
-        feedback_file = join(dirname(_h5f), "..", "feedback_ts.txt")
-        if exists(feedback_file):
+        feedback_file = Path(_h5f).parent.parent / "feedback_ts.txt"
+        if feedback_file.exists():
             timestamps = map(int, load_timestamps(feedback_file, 0))
             feedback_status = map(int, load_timestamps(feedback_file, 1))
             _dict["feedback_timestamps"] = list(zip(timestamps, feedback_status))
@@ -177,7 +175,7 @@ def build_manifest(loaded, format, snake_case=True):
     )
 
     for _dict, _h5f in loaded:
-        print_format = f"{format}_{splitext(basename(_h5f))[0]}"
+        print_format = f"{format}_{Path(_h5f).stem}"
         if not _dict["extraction_metadata"]:
             copy_path = fallback.format(fallback_count)
             fallback_count += 1
@@ -198,8 +196,8 @@ def build_manifest(loaded, format, snake_case=True):
             "additional_metadata": {},
         }
         for meta in additional_meta:
-            filename = join(dirname(_h5f), "..", meta["filename"])
-            if exists(filename):
+            filename = Path(_h5f).parents[1] / meta["filename"]
+            if filename.exists():
                 try:
                     data, timestamps = load_textdata(filename, dtype=meta["dtype"])
                     manifest[_h5f]["additional_metadata"][meta["var_name"]] = {
@@ -214,48 +212,43 @@ def build_manifest(loaded, format, snake_case=True):
     return manifest
 
 
-def copy_manifest_results(manifest, output_dir):
+def copy_manifest_results(manifest: dict, output_dir: str):
     """
     Copy all consolidated manifest results to their respective output files.
 
     Args:
     manifest (dict): manifest dictionary containing all extraction h5 metadata to save
     output_dir (str): path to directory where extraction results will be aggregated.
-
     """
 
-    if not exists(output_dir):
-        os.makedirs(output_dir)
+    output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
 
     # now the key is the source h5 file and the value is the path to copy to
     for k, v in tqdm(manifest.items(), desc="Copying files"):
+        h5_path = Path(k)
 
-        if exists(join(output_dir, f'{v["copy_path"]}.h5')):
+        if (copy_path := (output_dir / f'{v["copy_path"]}.h5')).exists():
             continue
 
-        in_basename = splitext(basename(k))[0]
-        in_dirname = dirname(k)
+        mp4_path = h5_path.with_suffix(".mp4")
 
-        h5_path = k
-        mp4_path = join(in_dirname, f"{in_basename}.mp4")
-
-        if exists(h5_path):
-            new_h5_path = join(output_dir, f'{v["copy_path"]}.h5')
-            shutil.copyfile(h5_path, new_h5_path)
+        if h5_path.exists():
+            shutil.copyfile(h5_path, copy_path)
 
         # if we have additional_meta then crack open the h5py and write to a safe place
         if len(v["additional_metadata"]) > 0:
             for k2, v2 in v["additional_metadata"].items():
                 new_key = f"/metadata/misc/{k2}"
-                with h5py.File(new_h5_path, "a") as f:
+                with h5py.File(copy_path, "a") as f:
                     f.create_dataset(f"{new_key}/data", data=v2["data"])
                     f.create_dataset(f"{new_key}/timestamps", data=v2["timestamps"])
 
-        if exists(mp4_path):
-            shutil.copyfile(mp4_path, join(output_dir, f'{v["copy_path"]}.mp4'))
+        if mp4_path.exists():
+            shutil.copyfile(mp4_path, copy_path.with_suffix(".mp4"))
 
         write_yaml(
-            f"{join(output_dir, v['copy_path'])}.yaml",
+            copy_path.with_suffix(".yaml"),
             dissoc(v["yaml_dict"], "extraction_metadata"),
         )
 
@@ -272,7 +265,7 @@ def handle_extract_metadata(input_file):
     timestamps (1D array): list of loaded timestamps
     """
 
-    # Handling non-compressed session paths
+    # Handling paths for other important files
     metadata_path = input_file.with_name("metadata.json")
     timestamp_path = input_file.with_name("depth_ts.txt")
     alternate_timestamp_path = input_file.with_name("timestamps.csv")

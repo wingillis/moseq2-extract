@@ -1,7 +1,6 @@
 """
 General utility functions throughout the extract package.
 """
-import os
 import re
 import cv2
 import json
@@ -9,6 +8,7 @@ import h5py
 import click
 import warnings
 import numpy as np
+import subprocess
 from pathlib import Path
 from ruamel.yaml import YAML
 from datetime import datetime
@@ -16,8 +16,6 @@ from cytoolz import valmap, concat
 from moseq2_extract.io.image import write_tiff
 from ruamel.yaml.error import UnsafeLoaderWarning
 from moseq2_extract.io.video import get_movie_info
-from os.path import join, exists, splitext, basename, dirname
-
 
 # provides a definition for each scalar recorded in h5 file
 SCALAR_ATTRIBUTES = {
@@ -62,7 +60,7 @@ def filter_warnings(func):
     return apply_warning_filters
 
 
-def set_bground_to_plane_fit(bground_im, plane, output_dir):
+def set_bground_to_plane_fit(bground_im, plane, output_dir: Path):
     """
     Replaces median-computed background image with plane fit.
     Only occurs if config_data['use_plane_bground'] == True.
@@ -70,7 +68,7 @@ def set_bground_to_plane_fit(bground_im, plane, output_dir):
     Args:
     bground_im (numpy.ndarray): Background image computed via median value in each pixel of depth video.
     plane (numpy.ndarray): Computed ROI Plane using RANSAC.
-    output_dir (str): Path to write updated background image to.
+    output_dir (Path): Path to write updated background image to.
 
     Returns:
     bground_im (numpy.ndarray): The background image.
@@ -82,7 +80,7 @@ def set_bground_to_plane_fit(bground_im, plane, output_dir):
     plane_im = (np.dot(coords.T, plane[:2]) + plane[3]) / -plane[2]
     plane_im = plane_im.reshape(bground_im.shape)
 
-    write_tiff(join(output_dir, 'bground.tiff'), plane_im, scale=True)
+    write_tiff(output_dir / 'bground.tiff', plane_im, scale=True)
 
     return plane_im
 
@@ -289,29 +287,39 @@ def generate_missing_metadata(sess_dir, sess_name):
                    'NidaqChannels': 0, 'NidaqSamplingRate': 0.0, 'DepthResolution': [512, 424],
                    'ColorDataType': "Byte[]", "StartTime": ""}
 
-    with open(join(sess_dir, 'metadata.json'), 'w') as fp:
+    with open(Path(sess_dir) / 'metadata.json', 'w') as fp:
         json.dump(sample_meta, fp)
 
-def load_metadata(metadata_file):
+def load_metadata(metadata_file: Path):
     """
     Load metadata from session metadata.json file.
 
     Args:
-    metadata_file (str): path to metadata file
+    metadata_file (Path): path to metadata file
 
     Returns:
     metadata (dict): metadata dictionary of JSON contents
     """
 
-    try:
-        if not exists(metadata_file):
-            generate_missing_metadata(dirname(metadata_file), basename(dirname(metadata_file)))
-
+    if metadata_file.exists():
         with open(metadata_file, 'r') as f:
             metadata = json.load(f)
-    except TypeError:
-        # try loading directly
-        metadata = json.load(metadata_file)
+    else:
+        # generate sample metadata json for each session that is missing one
+
+        session_name = metadata_file.parent.name
+        metadata = {
+            "SubjectName": "",
+            f"SessionName": session_name,
+            "NidaqChannels": 0,
+            "NidaqSamplingRate": 0.0,
+            "DepthResolution": [512, 424],
+            "ColorDataType": "Byte[]",
+            "StartTime": "",
+        }
+
+        with open(metadata_file, 'w') as fp:
+            json.dump(metadata, fp)
 
     return metadata
 
@@ -400,8 +408,10 @@ def convert_raw_to_avi_function(input_file, chunk_size=2000, fps=30, delete=Fals
     threads (int): number of threads to write video.
 
     """
+    input_file = Path(input_file)
 
-    new_file = f'{splitext(input_file)[0]}.avi'
+    new_file = input_file.with_suffix('.avi')
+
     print(f'Converting {input_file} to {new_file}')
     # turn into os system call...
     use_kwargs = {
@@ -423,7 +433,7 @@ def convert_raw_to_avi_function(input_file, chunk_size=2000, fps=30, delete=Fals
     print(base_command)
     print()
 
-    os.system(base_command)
+    subprocess.run(base_command, shell=True)
 
 def strided_app(a, L, S):  # Window len = L, Stride len/stepsize = S
     """
@@ -497,19 +507,19 @@ def _walk_and_filter(root_dir, filter_func):
 
     Args:
         root_dir (str): The root directory to start walking from.
-        filter_func (callable): A function that takes (root, file_name) and returns True
+        filter_func (callable): A function that takes a Path object and returns True
                                 if the file should be included, False otherwise.
 
     Returns:
-        list[str]: A list of absolute paths to the files that passed the filter.
+        list[Path]: A list of absolute paths to the files that passed the filter.
     """
     matched_paths = []
-    abs_root_dir = Path(root_dir).absolute()
-    for root, _, files in os.walk(abs_root_dir):
-        root = Path(root)
-        for file_path in map(lambda f: root / f, files):
-            if filter_func(file_path):
-                matched_paths.append(file_path)
+    root_path = Path(root_dir).absolute()
+    
+    for path in root_path.rglob('*'):
+        if path.is_file() and filter_func(path):
+            matched_paths.append(path)
+            
     return matched_paths
 
 
@@ -642,7 +652,7 @@ def read_yaml(yaml_file):
 
     with open(yaml_file, 'r') as f:
         return yaml.load(f)
-    
+
 
 def write_yaml(yaml_file, data: dict):
     """

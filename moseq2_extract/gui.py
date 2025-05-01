@@ -2,9 +2,8 @@
 GUI front-end operations accessible from a jupyter notebook.
 """
 
-import os
+from pathlib import Path
 from ast import literal_eval
-from os.path import dirname, basename, exists, join
 from moseq2_extract.util import read_yaml, write_yaml
 from moseq2_extract.io.image import read_tiff_files
 from moseq2_extract.helpers.extract import run_local_extract, run_slurm_extract
@@ -25,88 +24,87 @@ from moseq2_extract.cli import batch_extract
 
 def get_selected_sessions(to_extract, extract_all):
     """
-    Return either selected sessions to extract, or all the sessions given user input, the function will
+    Process session selection based on user input or return all sessions.
 
     Args:
-    to_extract (list): list of paths to sessions to extract
-    extract_all (bool): boolean to include all sessions and skip user-input prompt.
+        to_extract (list): List of paths to sessions to extract
+        extract_all (bool): If True, return all sessions without prompting user
 
     Returns:
-    to_extract (list): new list of selected sessions to extract.
+        list: Paths of selected sessions to extract
     """
+    if extract_all or len(to_extract) <= 1:
+        return [Path(sess) for sess in to_extract]
 
-    selected_sess_idx, excluded_sess_idx, ret_extract = [], [], []
+    # Display available sessions
+    for i, sess in enumerate(to_extract):
+        print(f"[{str(i + 1)}] {sess}")
+
+    print("You may input comma separated values for individual sessions")
+    print('Or you can input a hyphen separated range. E.g. "1-10" selects 10 sessions, including sessions 1 and 10')
+    print('You can also exclude a range by prefixing with "e"; e.g.: "e1-5".')
+    print("Press q to quit.")
+
+    selected_sess_idx, excluded_sess_idx = [], []
+    ret_extract = []
+
+    def is_valid_int(val):
+        try:
+            return isinstance(literal_eval(val), int)
+        except (ValueError, SyntaxError):
+            return False
 
     def parse_input(s):
-        """
-        Parse user input for specifically numbered sessions, ranges of sessions,
-        and/or sessions to exclude.
-
-        Args:
-        s (str): User input session indices.
-        """
-        if "e" not in s and "-" not in s:
-            if isinstance(literal_eval(s), int):
-                selected_sess_idx.append(int(s))
-        elif "e" not in s and "-" in s:
-            ss = s.split("-")
-            if isinstance(literal_eval(ss[0]), int) and isinstance(
-                literal_eval(ss[1]), int
-            ):
-                for i in range(int(ss[0]), int(ss[1]) + 1):
-                    selected_sess_idx.append(i)
-        elif "e" in s:
-            ss = s.strip("e ")
-            if "-" not in ss:
-                if isinstance(literal_eval(ss), int):
-                    excluded_sess_idx.append(int(ss))
-            else:
-                ssd = ss.split("-")
-                if isinstance(literal_eval(ssd[0]), int) and isinstance(
-                    literal_eval(ssd[1]), int
-                ):
-                    for i in range(int(ssd[0]), int(ssd[1]) + 1):
-                        excluded_sess_idx.append(i)
-
-    if len(to_extract) > 1 and not extract_all:
-        for i, sess in enumerate(to_extract):
-            print(f"[{str(i + 1)}] {sess}")
-
-        print("You may input comma separated values for individual sessions")
-        print(
-            'Or you can input a hyphen separated range. E.g. "1-10" selects 10 sessions, including sessions 1 and 10'
-        )
-        print(
-            'You can also exclude a range by prefixing the range selection with the letter "e"; e.g.: "e1-5".'
-        )
-        print("Press q to quit.")
-        while len(ret_extract) == 0:
-            sessions = input("Input your selected sessions to extract: ")
-            if "q" in sessions.lower():
-                return []
-            if "," in sessions:
-                selection = sessions.split(",")
-                for s in selection:
-                    s = s.strip()
-                    parse_input(s)
-                for i in selected_sess_idx:
-                    if i not in excluded_sess_idx:
-                        ret_extract.append(to_extract[i - 1])
-            elif len(sessions) > 0:
-                parse_input(sessions)
-                if len(selected_sess_idx) > 0:
-                    iters = selected_sess_idx
+        """Parse user input for session selection/exclusion."""
+        s = s.strip()
+        exclude = False
+        
+        if s.startswith('e'):
+            exclude = True
+            s = s[1:].strip()
+            
+        if '-' in s:
+            # Handle range
+            start, end = s.split('-', 1)
+            if is_valid_int(start) and is_valid_int(end):
+                indices = range(int(start), int(end) + 1)
+                if exclude:
+                    excluded_sess_idx.extend(indices)
                 else:
-                    iters = range(1, len(to_extract) + 1)
-                for i in iters:
-                    if i not in excluded_sess_idx:
-                        if i - 1 < len(to_extract):
-                            ret_extract.append(to_extract[i - 1])
+                    selected_sess_idx.extend(indices)
+        elif is_valid_int(s):
+            # Handle single number
+            idx = int(s)
+            if exclude:
+                excluded_sess_idx.append(idx)
             else:
-                print("Invalid input. Try again or press q to quit.")
-    else:
-        return to_extract
+                selected_sess_idx.append(idx)
+    
+    while not ret_extract:
+        sessions = input("Input your selected sessions to extract: ")
+        if "q" in sessions.lower():
+            return []
+            
+        if ',' in sessions:
+            # Process comma-separated selections
+            for s in sessions.split(','):
+                parse_input(s.strip())
+        elif sessions:
+            # Process single selection
+            parse_input(sessions)
+            
+            # If no sessions selected, assume all
+            if not selected_sess_idx:
+                selected_sess_idx = list(range(1, len(to_extract) + 1))
+        else:
+            print("Invalid input. Try again or press q to quit.")
+            continue
 
+        # Build final selection list
+        for i in selected_sess_idx:
+            if i not in excluded_sess_idx and 0 < i <= len(to_extract):
+                ret_extract.append(Path(to_extract[i - 1]))
+                
     return ret_extract
 
 
@@ -133,7 +131,7 @@ def generate_config_command(output_file, camera_type="k2"):
         params["tail_filter_size"] = [15, 15]
 
     # Check if the file already exists, and prompt user if they would like to overwrite pre-existing file
-    if exists(output_file):
+    if Path(output_file).exists():
         ow = input(
             "This file already exists, would you like to overwrite it? [y -> yes, n -> no] "
         )
@@ -165,7 +163,7 @@ def extract_found_sessions(
 
     """
     # error out early
-    if not exists(config_file):
+    if not Path(config_file).exists():
         raise IOError(f"Config file {config_file} does not exist")
 
     to_extract = []
@@ -237,10 +235,9 @@ def aggregate_extract_results_command(
     indexpath (str): path to generated index file (moseq2-index.yaml).
     """
 
-    output_dir = join(input_dir, output_dir)
+    output_dir = Path(input_dir) / output_dir
 
-    if not exists(output_dir):
-        os.makedirs(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
 
     indexpath = aggregate_extract_results_wrapper(
         input_dir, format, output_dir, mouse_threshold
@@ -303,7 +300,7 @@ def find_roi_command(
     print(f"Processing session: {input_file}")
     config_data = read_yaml(config_file)
 
-    output_dir = join(dirname(input_file), "proc")
+    output_dir = Path(input_file).parent / "proc"
     get_roi_wrapper(input_file, config_data, output_dir)
 
     write_yaml(config_file, config_data)
@@ -329,13 +326,14 @@ def extract_command(input_file, output_dir, config_file, num_frames=None, skip=F
     Returns:
     (str): String indicating that the extracted is completed.
     """
+    input_file = Path(input_file)
 
     config_data = read_yaml(config_file)
 
     # Loading individual session config parameters if it exists
-    if exists(config_data.get("session_config_path", "")):
+    if Path(config_data.get("session_config_path", "")).exists():
         session_configs = read_yaml(config_data["session_config_path"])
-        session_key = basename(dirname(input_file))
+        session_key = input_file.parent.name
 
         # If key is found, update config_data, otherwise, use default dict
         config_data = session_configs.get(session_key, config_data)

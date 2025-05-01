@@ -157,22 +157,6 @@ AVI_OPTIONS = [
         ["--delete"],
         {"is_flag": True, "help": "Delete raw file if encoding is successful"},
     ),
-    (
-        ["-t", "--threads"],
-        {
-            "type": int,
-            "default": 8,
-            "help": "Number of threads used saving ffv1 endcoded AVI file with ffmpeg",
-        },
-    ),
-    (
-        ["-m", "--mapping"],
-        {
-            "type": str,
-            "default": "DEPTH",
-            "help": "Ffprobe stream selection variable. Default: DEPTH",
-        },
-    ),
 ]
 
 EXTRACT_OPTIONS = [

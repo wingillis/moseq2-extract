@@ -3,7 +3,7 @@ import sys
 import h5py
 import shutil
 from copy import deepcopy
-from os.path import exists
+from pathlib import Path
 from unittest import TestCase
 from .test_cli import write_fake_movie
 from moseq2_extract.helpers.wrappers import copy_h5_metadata_to_yaml_wrapper
@@ -24,7 +24,7 @@ class GUITests(TestCase):
 
     @classmethod
     def setUpClass(cls):
-        if exists("data/data/"):
+        if Path("data/data/").exists():
             shutil.rmtree("data/data/")
 
     def test_get_selected_sessions(self):
