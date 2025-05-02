@@ -16,8 +16,8 @@ from cytoolz import partial, keyfilter, dissoc
 from moseq2_extract.io.image import write_tiff
 from moseq2_extract.helpers.extract import process_extract_batches
 from moseq2_extract.extract.proc import get_roi, get_bground_im_file
-from moseq2_extract.helpers.parameters import MouseProcessing, ArenaParams
 from moseq2_extract.io.video import get_movie_info, write_frames, batched_video_reader
+from moseq2_extract.helpers.parameters import MouseProcessing, ArenaParams, EMTrackingModel
 from moseq2_extract.util import mouse_threshold_filter, filter_warnings, read_yaml, write_yaml
 from moseq2_extract.helpers.data import (
     handle_extract_metadata,
@@ -331,6 +331,13 @@ def extract_wrapper(input_file, output_dir, config_data, num_frames=None, skip=F
     mouse_proc_params = MouseProcessing(**filtered_params)
     config_data = dissoc(config_data, *filtered_params.keys())
 
+    # filter for EM tracking parameters
+    filtered_params = keyfilter(
+        lambda k: k in EMTrackingModel.__dataclass_fields__, config_data
+    )
+    em_tracking_params = EMTrackingModel(**filtered_params)
+    config_data = dissoc(config_data, *filtered_params.keys())
+
     # ensure 'get_cmd' and 'run_cmd' are not in config_data or get_bground_im_file will fail
     config_data = dissoc(config_data, "get_cmd", "run_cmd", "extensions")
 
@@ -441,6 +448,7 @@ def extract_wrapper(input_file, output_dir, config_data, num_frames=None, skip=F
             scalars=scalars,
             output_mov_path=movie_filename,
             mouse_proc_params=mouse_proc_params,
+            em_tracking_params=em_tracking_params,
         )
 
     print()

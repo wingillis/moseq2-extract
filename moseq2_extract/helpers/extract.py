@@ -9,8 +9,8 @@ from pathlib import Path
 from tqdm.auto import tqdm
 from moseq2_extract.util import read_yaml, write_yaml
 from moseq2_extract.extract.extract import extract_chunk
-from moseq2_extract.helpers.parameters import MouseProcessing
 from moseq2_extract.helpers.data import check_completion_status
+from moseq2_extract.helpers.parameters import MouseProcessing, EMTrackingModel
 from moseq2_extract.io.video import write_frames_preview, open_video_writer, batched_video_reader
 
 
@@ -49,7 +49,7 @@ def write_extracted_chunk_to_h5(
 
 
 def set_tracking_model_parameters(
-    results, min_height, tracking_model_ll_clip, chunk_overlap, **kwargs
+    results, min_height, ll_clip, chunk_overlap,
 ):
     """
     Threshold and clip the masked frame data if use_tracking_model = True and update results.
@@ -67,12 +67,11 @@ def set_tracking_model_parameters(
     """
 
     # Thresholding and clipping EM-tracked frame mask data
-    results["mask_frames"][
-        results["depth_frames"] < min_height
-    ] = tracking_model_ll_clip
-    results["mask_frames"][
-        results["mask_frames"] < tracking_model_ll_clip
-    ] = tracking_model_ll_clip
+    results["mask_frames"] = np.where(
+        np.logical_or(results["depth_frames"] < min_height, results["mask_frames"] < ll_clip),
+        ll_clip,
+        results["mask_frames"],
+    )
 
     # Updating EM tracking estimators
     tracking_init_mean = results["parameters"]["mean"][-(chunk_overlap + 1)]
@@ -126,6 +125,7 @@ def process_extract_batches(
     h5_file=None,
     video_pipe=None,
     mouse_proc_params: MouseProcessing = None,
+    em_tracking_params: EMTrackingModel = None,
     **kwargs,
 ):
     """
@@ -146,9 +146,6 @@ def process_extract_batches(
 
     Returns:
     """
-
-    tracking_init_mean = config_data.pop("tracking_init_mean", None)
-    tracking_init_cov = config_data.pop("tracking_init_cov", None)
 
     with open_video_writer(
         output_mov_path,
@@ -177,16 +174,19 @@ def process_extract_batches(
                 chunk=raw_chunk,
                 roi=roi,
                 bground=bground_im,
-                tracking_init_mean=tracking_init_mean,
-                tracking_init_cov=tracking_init_cov,
                 mouse_proc_params=mouse_proc_params,
+                em_tracking_params=em_tracking_params,
             )
 
             if mouse_proc_params.use_tracking_model:
                 # threshold and clip mask frames from EM tracking results
-                results, tracking_init_mean, tracking_init_cov = (
-                    set_tracking_model_parameters(results, **config_data)
+                results, mean, cov = set_tracking_model_parameters(
+                    results,
+                    ll_clip=em_tracking_params.tracking_model_ll_clip,
+                    chunk_overlap=config_data["chunk_overlap"],
                 )
+                em_tracking_params.tracking_model_init_mean = mean
+                em_tracking_params.tracking_model_init_cov = cov
 
             # Offsetting frame chunk by CLI parameter defined option: chunk_overlap
             frame_range = frame_range[offset:]

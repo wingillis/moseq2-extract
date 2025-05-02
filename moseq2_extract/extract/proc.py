@@ -356,8 +356,7 @@ def im_moment_features(IM):
 
 
 def clean_frames(frames, mouse_proc_params: MouseProcessing,
-                 frame_dtype='uint8',
-                 iters_min=None, progress_bar=False):
+                 frame_dtype='uint8', progress_bar=False):
     """
     Simple temporal and/or spatial filtering, median filter and morphological opening.
 
@@ -377,8 +376,8 @@ def clean_frames(frames, mouse_proc_params: MouseProcessing,
 
     for i in tqdm(range(len(frames)), disable=not progress_bar, desc='Cleaning frames'):
         # Erode Frames
-        if iters_min is not None and iters_min > 0:
-            filtered_frames[i] = cv2.erode(filtered_frames[i], mouse_proc_params.strel_min, iters_min)
+        if mouse_proc_params.cable_filter_iters is not None and mouse_proc_params.cable_filter_iters > 0:
+            filtered_frames[i] = cv2.erode(filtered_frames[i], mouse_proc_params.strel_min, mouse_proc_params.cable_filter_iters)
         # Median Blur
         if mouse_proc_params.spatial_filter_size is not None and np.all(np.array(mouse_proc_params.spatial_filter_size) > 0):
             for size in mouse_proc_params.spatial_filter_size:

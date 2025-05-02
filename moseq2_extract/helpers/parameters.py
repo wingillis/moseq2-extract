@@ -106,4 +106,17 @@ class EMTrackingModel:
     tracking_model_ll_threshold: float = -100
     tracking_model_mask_threshold: float = -16
     tracking_model_segment: bool = True
-    tracking_model_init: str = "raw"
+    tracking_model_init: Literal["med", "min", "raw"] = "raw"
+    tracking_model_init_mean: np.ndarray | None = None
+    tracking_model_init_cov: np.ndarray | None = None
+
+    tracking_model_init_strel: np.ndarray = field(init=False)
+
+    # exponential smoothing parameter - unused but present just in case
+    smoothing_rho: float = field(init=False, default=0)
+
+    def __post_init__(self):
+        # Create structuring element for EM tracking model
+        self.tracking_model_init_strel = cv2.getStructuringElement(
+            cv2.MORPH_ELLIPSE, (9, 9)
+        )
