@@ -235,7 +235,7 @@ def get_roi_wrapper(input_file, config_data, output_dir=None):
 
     if output_dir is None:
         output_dir = input_file.parent / "proc"
-    elif len(Path(output_dir).parts) == 1 or Path(output_dir).parent not in input_file:
+    elif len(Path(output_dir).parts) == 1 or str(Path(output_dir).parent) not in str(input_file):
         output_dir = Path(input_file).parent / output_dir
     else:
         output_dir = Path(output_dir)

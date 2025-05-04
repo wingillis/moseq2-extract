@@ -215,9 +215,8 @@ def open_video_writer(filename, fps, depth_min, depth_max, cmap="jet"):
         frame = np.clip((frame - depth_min) / (depth_max - depth_min), 0, 1)
         frame = np.uint8(cmap(frame)[..., :3] * 255)
 
-        frame_num_str = str(frame_num)
         try:
-            cv2.putText(frame, frame_num_str, txt_pos, font, 1, white, 2, cv2.LINE_AA)
+            cv2.putText(frame, f"{frame_num}", txt_pos, font, 1, white, 2, cv2.LINE_AA)
         except (IndexError, ValueError):
             # len(frame_range) M < len(frames) or txt_pos is outside of the frame dimensions
             print("Could not overlay frame number on preview on video.")
