@@ -236,7 +236,8 @@ def get_roi(depth_image,
         mask = np.logical_and(gradient_x < arena_params.bg_roi_gradient_threshold, gradient_y < arena_params.bg_roi_gradient_threshold)
 
     roi_plane, dist_ims = plane_ransac(
-        depth_image, noise_tolerance=arena_params.noise_tolerance, mask=mask, **kwargs)
+        depth_image, noise_tolerance=arena_params.noise_tolerance, mask=mask,
+        bg_roi_depth_range=arena_params.bg_roi_depth_range)
 
     if arena_params.bg_roi_gradient_filter:
         dist_ims[~mask] = np.inf

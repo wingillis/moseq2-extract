@@ -47,7 +47,6 @@ def plane_ransac(
     in_ratio=0.1,
     progress_bar=False,
     mask=None,
-    **kwargs,
 ):
     """
     Fit a plane using a naive RANSAC implementation
