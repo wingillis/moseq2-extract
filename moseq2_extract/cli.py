@@ -203,7 +203,7 @@ def download_flip_file(ctx, output_dir):
     help="specify the camera type (k2 or azure), default is k2",
 )
 def generate_config(output_file, camera_type):
-    """Copy default TOML and patch selected fields via sed to keep comments/structure."""
+    """Copy default config and patch selected fields via sed to keep comments/structure."""
     import shutil
 
     script_path = Path(__file__).parent
