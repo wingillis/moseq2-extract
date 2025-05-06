@@ -9,6 +9,7 @@ import shutil
 import warnings
 import numpy as np
 import urllib.request
+from math import ceil
 from pathlib import Path
 from copy import deepcopy
 from tqdm.auto import tqdm
@@ -16,7 +17,7 @@ from cytoolz import partial, keyfilter, dissoc
 from moseq2_extract.io.image import write_tiff
 from moseq2_extract.helpers.extract import process_extract_batches
 from moseq2_extract.extract.proc import get_roi, get_bground_im_file
-from moseq2_extract.io.video import get_movie_info, write_frames, batched_video_reader
+from moseq2_extract.io.video import get_movie_info, encode_depth_to_avi, batched_video_reader, encode_depth_to_avi_batch
 from moseq2_extract.helpers.parameters import MouseProcessing, ArenaParams, EMTrackingModel
 from moseq2_extract.util import mouse_threshold_filter, filter_warnings, read_yaml, write_yaml
 from moseq2_extract.helpers.data import (
@@ -554,24 +555,24 @@ def convert_raw_to_avi_wrapper(
         output_file = input_file.with_suffix(".avi")
 
     vid_info = get_movie_info(input_file)
-    video_pipe = None
 
-    # TODO: replace with pyav solution
-    for (indices, frames) in batched_video_reader(input_file, n_frames=vid_info["nframes"], batch_size=chunk_size):
-        video_pipe = write_frames(
-            output_file,
-            frames,
-            pipe=video_pipe,
-            close_pipe=False,
-            fps=fps,
-        )
+    # Encode raw depth frames to avi file
+    with encode_depth_to_avi(
+        output_file, fps=fps, height=vid_info["dims"][1], width=vid_info["dims"][0]
+    ) as writer:
+        for indices, frames in tqdm(batched_video_reader(
+            input_file, n_frames=vid_info["nframes"], batch_size=chunk_size
+        ), total=ceil(vid_info["nframes"] / chunk_size), desc="Encoding raw depth frames to avi file"):
+            encode_depth_to_avi_batch(frames, writer)
 
-    if video_pipe:
-        video_pipe.communicate()
-
-    for (raw_indices, raw_frames), (encoded_indices, encoded_frames) in zip(
-        batched_video_reader(input_file, n_frames=vid_info["nframes"], batch_size=chunk_size),
-        batched_video_reader(output_file, n_frames=vid_info["nframes"], batch_size=chunk_size),
+    # Test integrity of encoded video
+    for (raw_indices, raw_frames), (encoded_indices, encoded_frames) in tqdm(
+        zip(
+            batched_video_reader(input_file, n_frames=vid_info["nframes"], batch_size=chunk_size),
+            batched_video_reader(output_file, n_frames=vid_info["nframes"], batch_size=chunk_size),
+        ),
+        total=ceil(vid_info["nframes"] / chunk_size),
+        desc="Testing integrity of encoded video",
     ):
         if not np.array_equal(raw_frames, encoded_frames):
             raise RuntimeError("Raw frames and encoded frames not equal")
@@ -584,10 +585,10 @@ def convert_raw_to_avi_wrapper(
 
 
 def copy_slice_wrapper(
-    input_file, output_file, copy_slice, chunk_size, fps, delete, threads, mapping
+    input_file, output_file, copy_slice, chunk_size, fps, delete
 ):
     """
-    Copy a segment of an input depth recording into a new video file.
+    Copy a segment of an input depth recording into a new video file. Will always encode to avi format.
 
     Args:
     input_file (str): Path to depth file to read segment from
@@ -596,24 +597,19 @@ def copy_slice_wrapper(
     chunk_size (int): Size of frame chunks to iteratively process
     fps (int): Frames per second.
     delete (bool): Delete the original depth file if True.
-    threads (int): Number of threads used to encode video.
-    mapping (str or int): Indicate which video stream to from the inputted file
 
     Returns:
     """
     input_file = Path(input_file)
 
     if output_file is None:
-        avi_encode = True
         output_file = input_file.with_suffix(".avi")
     else:
         output_file = Path(output_file)
-        avi_encode = output_file.suffix == ".avi"
+
 
     vid_info = get_movie_info(input_file)
     copy_slice = (copy_slice[0], min(copy_slice[1], vid_info["nframes"]))
-
-    video_pipe = None
 
     if output_file.exists():
         overwrite = input(
@@ -622,30 +618,19 @@ def copy_slice_wrapper(
         if overwrite != "":
             sys.exit(0)
 
-    for (indices, frames) in batched_video_reader(
-        input_file,
-        n_frames=copy_slice[1],  # this is the end frame
-        batch_size=chunk_size,
-        offset=copy_slice[0],
-        frame_size=vid_info["dims"],
-        overlap=0,
-    ):
-        if avi_encode:
-            video_pipe = write_frames(
-                output_file,
-                frames,
-                pipe=video_pipe,
-                close_pipe=False,
-                threads=threads,
-                fps=fps,
-            )
-        else:
-            with open(output_file, "ab") as f:
-                f.write(frames.astype("uint16").tobytes())
+    with encode_depth_to_avi(
+        output_file, fps=fps, height=vid_info["dims"][1], width=vid_info["dims"][0]
+    ) as writer:
+        for (indices, frames) in batched_video_reader(
+            input_file,
+            n_frames=copy_slice[1],  # this is the end frame
+            batch_size=chunk_size,
+            offset=copy_slice[0],
+            frame_size=vid_info["dims"],
+        ):
+            encode_depth_to_avi_batch(frames, writer)
 
-    if avi_encode and video_pipe:
-        video_pipe.communicate()
-
+    # Test integrity of encoded video
     for (raw_indices, raw_frames), (encoded_indices, encoded_frames) in zip(
         batched_video_reader(input_file, n_frames=copy_slice[1], batch_size=chunk_size, offset=copy_slice[0]),
         batched_video_reader(output_file, n_frames=copy_slice[1] - copy_slice[0], batch_size=chunk_size),

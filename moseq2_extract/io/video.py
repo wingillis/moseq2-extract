@@ -68,8 +68,8 @@ def read_frames_raw(
     movie_dtype="<u2",
 ) -> Iterator[np.ndarray]:
     data = np.memmap(
-        file_name, dtype=np.dtype(movie_dtype), mode="r", shape=(-1, frame_size[1], frame_size[0])
-    )
+        file_name, dtype=np.dtype(movie_dtype), mode="r"
+    ).reshape(-1, frame_size[1], frame_size[0])
 
     if frame_indices is None:
         frame_indices = range(data.shape[0])
@@ -79,7 +79,6 @@ def read_frames_raw(
 
 
 def get_avi_metadata(path: Path) -> int:
-    # TODO: tested with original depth.avi files, need to test with orbbec avi files
     with av.open(path, 'r') as container:
         video_stream = container.streams.video[0]
         # get width, height
@@ -100,96 +99,77 @@ def get_avi_metadata(path: Path) -> int:
     }
 
 
-# simple command to pipe frames to an ffv1 file
-def write_frames(
-    filename,
-    frames,
-    threads=6,
-    fps=30,
-    pixel_format="gray16le",
-    codec="ffv1",
-    close_pipe=True,
-    pipe=None,
-    frame_dtype="uint16",
-    slices=24,
-    slicecrc=1,
-    frame_size=None,
-    get_cmd=False,
+@contextmanager
+def encode_depth_to_avi(
+    filename: str | Path,
+    fps: int = 30,
+    pixel_format: str = "gray16le",
+    codec: str = "ffv1",
+    frame_dtype: str = "uint16",
+    slices: int = 24,
+    slicecrc: int = 1,
+    height: int = None,
+    width: int = None,
 ):
     """
-    Write frames to avi file using the ffv1 lossless encoder
+    Context manager for encoding depth frames to an AVI file using the ffv1 lossless encoder.
 
     Args:
-    filename (str): path to file to write to.
-    frames (np.ndarray): frames to write
-    threads (int): number of threads to write video
-    fps (int): frames per second
-    pixel_format (str): format video color scheme
-    codec (str): ffmpeg encoding-writer method to use
-    close_pipe (bool): indicates to close the open pipe to video when done writing.
-    pipe (subProcess.Pipe): pipe to currently open video file.
-    frame_dtype (str): indicates the data type to use when writing the videos
-    slices (int): number of frame slices to write at a time.
-    slicecrc (int): check integrity of slices
-    frame_size (tuple): shape/dimensions of image.
-    get_cmd (bool): indicates whether function should return ffmpeg command (instead of executing)
+        filename (str | Path): Path to file to write to
+        fps (int): Frames per second
+        pixel_format (str): Format video color scheme
+        codec (str): ffmpeg encoding-writer method to use
+        frame_dtype (str): Data type to use when writing the videos
+        slices (int): Number of frame slices to write at a time
+        slicecrc (int): Check integrity of slices
+        height (int): Height of the video
+        width (int): Width of the video
 
-    Returns:
-    pipe (subProcess.Pipe): indicates whether video writing is complete.
+    Yields:
+        writer: Function that writes frames to the video file
+    """
+    container = av.open(filename, mode='w')
+    stream = container.add_stream(codec, rate=int(fps))
+    
+    if height and width:
+        stream.width = width
+        stream.height = height
+    
+    stream.pix_fmt = pixel_format
+    stream.options = {
+        'slices': str(slices),
+        'slicecrc': str(slicecrc)
+    }
+
+    def write_frame(frame):
+        if not isinstance(frame, av.VideoFrame):
+            frame = av.VideoFrame.from_ndarray(frame.astype(frame_dtype), format=pixel_format)
+        
+        for packet in stream.encode(frame):
+            container.mux(packet)
+
+    try:
+        yield write_frame
+    finally:
+        # Flush the encoder
+        for packet in stream.encode():
+            container.mux(packet)
+        container.close()
+
+def encode_depth_to_avi_batch(
+    frames: np.ndarray,
+    write_fun: callable,
+):
+    """
+    Write a batch of frames to an AVI file using the ffv1 lossless encoder.
+
+    Args:
+        frames (np.ndarray): Frames to write
+        write_fun (callable): Function that writes frames to the video file
     """
 
-    # we probably want to include a warning about multiples of 32 for videos
-    # (then we can use pyav and some speedier tools)
-    if not frame_size and isinstance(frames, np.ndarray):
-        frame_size = "{0:d}x{1:d}".format(frames.shape[2], frames.shape[1])
-    elif not frame_size and isinstance(frames, tuple):
-        frame_size = "{0:d}x{1:d}".format(frames[0], frames[1])
-
-    command = [
-        "ffmpeg",
-        "-y",
-        "-loglevel",
-        "fatal",
-        "-framerate",
-        str(fps),
-        "-f",
-        "rawvideo",
-        "-s",
-        frame_size,
-        "-pix_fmt",
-        pixel_format,
-        "-i",
-        "-",
-        "-an",
-        "-vcodec",
-        codec,
-        "-threads",
-        str(threads),
-        "-slices",
-        str(slices),
-        "-slicecrc",
-        str(slicecrc),
-        "-r",
-        str(fps),
-        filename,
-    ]
-
-    if get_cmd:
-        return command
-
-    if not pipe:
-        pipe = subprocess.Popen(command, stdin=subprocess.PIPE, stderr=subprocess.PIPE)
-
-    for i in tqdm(
-        range(frames.shape[0]), disable=True, desc=f"Writing frames to {filename}"
-    ):
-        pipe.stdin.write(frames[i].astype(frame_dtype).tostring())
-
-    if close_pipe:
-        pipe.communicate()
-        return None
-    else:
-        return pipe
+    for frame in frames:
+        write_fun(frame)
 
 
 @contextmanager
@@ -256,6 +236,7 @@ def avi_reader(path) -> Iterator[np.ndarray]:
 
 def avi_video_sequence(file_path: Path, indices: np.ndarray) -> Iterator[np.ndarray]:
     with av.open(file_path) as container:
+        container.streams.video[0].thread_type = "AUTO"
         stream = container.streams.video[0]
 
         for index in indices:
@@ -310,7 +291,6 @@ def batched_video_reader(
     n_frames: int,
     batch_size=1000,
     frame_size=(512, 424),
-    bit_depth=16,
     overlap=0,
     offset=0,
     **kwargs,
@@ -365,7 +345,7 @@ def batched_video_reader(
                 for i, frame in zip(
                     batch,
                     read_frames_raw(
-                        filename, frames=batch, frame_size=frame_size, bit_depth=bit_depth, **kwargs
+                        filename, frame_indices=batch, frame_size=frame_size, movie_dtype=kwargs.get("movie_dtype", "uint16")
                     ),
                 ):
                     yield i, frame
