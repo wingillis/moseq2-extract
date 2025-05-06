@@ -524,7 +524,6 @@ def flip_file_wrapper(config_file, output_dir, selected_flip=None):
     print("Successfully downloaded flip file to", output_filename)
 
     # Update the config file with the latest path to the flip classifier
-    # TODO: update for toml file instead of yaml
     try:
         config_data = read_yaml(config_file)
         config_data["flip_classifier"] = str(output_filename)

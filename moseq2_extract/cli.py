@@ -32,7 +32,7 @@ slurm_options = option_spec(SLURM_OPTIONS)
 
 
 def load_config(ctx, param, value):
-    """Callback to load configuration from a TOML file and set defaults."""
+    """Callback to load configuration from a yaml file and set defaults."""
     if not value or not Path(value).exists():
         return None  # No config file specified or found
 
@@ -65,7 +65,7 @@ def load_config(ctx, param, value):
 @click.option(
     "--config-file",
     type=click.Path(dir_okay=False),
-    help="Path to a TOML configuration file. Options defined here are overridden by CLI arguments.",
+    help="Path to a yaml configuration file. Options defined here are overridden by CLI arguments.",
     callback=load_config,
     is_eager=True,
 )
