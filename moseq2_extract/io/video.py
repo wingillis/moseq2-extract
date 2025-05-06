@@ -5,11 +5,9 @@ Video and video-metadata read/write functions.
 import av
 import os
 import cv2
-import subprocess
 import numpy as np
 import imageio.v3 as iio
 import matplotlib.pyplot as plt
-from tqdm.auto import tqdm
 from pathlib import Path
 from cytoolz import partition_all
 from collections import deque

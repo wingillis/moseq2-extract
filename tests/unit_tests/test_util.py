@@ -22,7 +22,6 @@ from moseq2_extract.util import (
     get_strels,
     get_bucket_center,
     make_gradient,
-    convert_raw_to_avi_function,
     recursive_find_h5s,
     load_textdata,
     build_path,
@@ -145,18 +144,6 @@ class TestExtractUtils(TestCase):
 
         assert loaded_dict == tmp_dict
         os.remove(json_file)
-
-    def test_convert_raw_to_avi(self):
-
-        # writing a file to test following pipeline
-        data_path = "data/fake_movie_to_convert.dat"
-
-        write_fake_movie(data_path)
-
-        convert_raw_to_avi_function(data_path)
-        assert os.path.isfile(data_path.replace(".dat", ".avi"))
-        os.remove(data_path)
-        os.remove(data_path.replace(".dat", ".avi"))
 
     def test_select_strel(self):
 

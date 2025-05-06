@@ -151,7 +151,6 @@ AVI_OPTIONS = [
         ["-o", "--output-file"],
         {"type": click.Path(), "default": None, "help": "Path to output file"},
     ),
-    (["-b", "--chunk-size"], {"type": int, "default": 3000, "help": "Chunk size"}),
     (["--fps"], {"type": float, "default": 30, "help": "Video FPS"}),
     (
         ["--delete"],
@@ -160,6 +159,7 @@ AVI_OPTIONS = [
 ]
 
 EXTRACT_OPTIONS = [
+    (["-b", "--chunk-size"], {"type": int, "default": 3000, "help": "Chunk size"}),
     (
         ["--crop-size", "-c"],
         {
@@ -394,14 +394,6 @@ EXTRACT_OPTIONS = [
             "type": bool,
             "help": "Convert .dat to .avi after successful extraction",
         },
-    ),
-    (
-        ["--compress-chunk-size"],
-        {"type": int, "default": 3000, "help": "Chunk size for .avi compression"},
-    ),
-    (
-        ["--compress-threads"],
-        {"type": int, "default": 3, "help": "Number of threads for encoding"},
     ),
     (
         ["--skip-completed"],

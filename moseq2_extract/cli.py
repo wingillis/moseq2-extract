@@ -2,7 +2,6 @@
 CLI for extracting the depth data.
 """
 
-import toml
 import click
 from moseq2_extract.cli_spec import (
     ROI_OPTIONS,
@@ -11,7 +10,7 @@ from moseq2_extract.cli_spec import (
     SLURM_OPTIONS,
     option_spec,
 )
-from moseq2_extract.util import recursive_find_unextracted_dirs
+from moseq2_extract.util import recursive_find_unextracted_dirs, read_yaml
 from moseq2_extract.helpers.wrappers import (
     get_roi_wrapper,
     extract_wrapper,
@@ -38,8 +37,7 @@ def load_config(ctx, param, value):
         return None  # No config file specified or found
 
     try:
-        with open(value, "r") as f:
-            config = toml.load(f)
+        config = read_yaml(value)
         # Extract the [extract] section if it exists
         extract_config = config.get("extract", {})
         if not isinstance(extract_config, dict):
@@ -197,7 +195,7 @@ def download_flip_file(ctx, output_dir):
     name="generate-config",
     help="Generates a configuration file (config.yaml) that holds editable options for extraction parameters.",
 )
-@click.option("--output-file", "-o", type=click.Path(), default="config.toml")
+@click.option("--output-file", "-o", type=click.Path(), default="config.yaml")
 @click.option(
     "--camera-type",
     default="k2",
@@ -209,15 +207,15 @@ def generate_config(output_file, camera_type):
     import shutil
 
     script_path = Path(__file__).parent
-    default_path = script_path / "default-config.toml"
+    default_path = script_path / "default-config.yaml"
     shutil.copy(default_path, output_file)
 
     if camera_type == "azure":
         replacements = [
-            ("bg_roi_depth_range", "[ 550, 650 ]"),
-            ("spatial_filter_size", "[ 5 ]"),
-            ("tail_filter_size", "[ 15, 15 ]"),
-            ("crop_size", "[ 120, 120 ]"),
+            ("bg_roi_depth_range", "[550, 650]"),
+            ("spatial_filter_size", "[5]"),
+            ("tail_filter_size", "[15, 15]"),
+            ("crop_size", "[120, 120]"),
             ("camera_type", '"azure"'),
         ]
 
@@ -228,7 +226,7 @@ def generate_config(output_file, camera_type):
         for line in lines:
             for key, val in replacements:
                 if key in line:
-                    line = f"{key} = {val}\n"
+                    line = f"  {key}: {val}\n"
                     break
             new_lines.append(line)
 

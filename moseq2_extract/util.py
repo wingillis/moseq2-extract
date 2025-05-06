@@ -8,11 +8,9 @@ import h5py
 import click
 import warnings
 import numpy as np
-import subprocess
 from pathlib import Path
+from cytoolz import valmap
 from ruamel.yaml import YAML
-from datetime import datetime
-from cytoolz import valmap, concat
 from moseq2_extract.io.image import write_tiff
 from ruamel.yaml.error import UnsafeLoaderWarning
 from moseq2_extract.io.video import get_movie_info
@@ -396,44 +394,6 @@ def convert_pxs_to_mm(coords, resolution=(512, 424), field_of_view=(70.6, 60), t
 
     return new_coords
 
-def convert_raw_to_avi_function(input_file, chunk_size=2000, fps=30, delete=False, threads=3):
-    """
-    Compress depth .dat file to avi file.
-
-    Args:
-    input_file (str): path to depth file
-    chunk_size (int): size of chunks to process at a time
-    fps (int): frames per second
-    delete (bool): flag for deleting original depth file
-    threads (int): number of threads to write video.
-
-    """
-    input_file = Path(input_file)
-
-    new_file = input_file.with_suffix('.avi')
-
-    print(f'Converting {input_file} to {new_file}')
-    # turn into os system call...
-    use_kwargs = {
-        'output-file': new_file,
-        'chunk-size': chunk_size,
-        'fps': fps,
-        'threads': threads
-    }
-    use_flags = {
-        'delete': delete
-    }
-    base_command = f'moseq2-extract convert-raw-to-avi {input_file}'
-    for k, v in use_kwargs.items():
-        base_command += f' --{k} {v}'
-    for k, v in use_flags.items():
-        if v:
-            base_command += f' --{k}'
-
-    print(base_command)
-    print()
-
-    subprocess.run(base_command, shell=True)
 
 def strided_app(a, L, S):  # Window len = L, Stride len/stepsize = S
     """

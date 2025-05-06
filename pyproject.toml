@@ -37,6 +37,9 @@ docs = [
     "sphinx-click", 
     "sphinx-rtd-theme"
 ]
+dev = [
+    "pylint>=3.3.7",
+]
 
 [project.scripts]
 moseq2-extract = "moseq2_extract.cli:cli"

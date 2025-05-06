@@ -30,7 +30,6 @@ from moseq2_extract.helpers.data import (
     check_completion_status,
 )
 from moseq2_extract.util import (
-    convert_raw_to_avi_function,
     set_bground_to_plane_fit,
     recursive_find_h5s,
     clean_dict,
@@ -457,12 +456,12 @@ def extract_wrapper(input_file, output_dir, config_data, num_frames=None, skip=F
     # Compress the depth file to avi format; compresses original raw file by ~8x.
     try:
         if input_file.suffix == ".dat" and config_data["compress"]:
-            convert_raw_to_avi_function(
+            convert_raw_to_avi_wrapper(
                 input_file,
-                chunk_size=config_data["compress_chunk_size"],
+                output_file=input_file.with_suffix(".avi"),
+                chunk_size=config_data["chunk_size"],
                 fps=config_data["fps"],
-                delete=False,  # to be changed when we're ready!
-                threads=config_data["compress_threads"],
+                delete=False,
             )
     except AttributeError as e:
         print("Error converting raw video to avi format, continuing anyway...")

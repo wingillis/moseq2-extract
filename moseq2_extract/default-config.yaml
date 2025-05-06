@@ -1,0 +1,71 @@
+extract:
+
+  # General commands
+  progress_bar: false
+  output_dir: "proc"
+  delete: false
+  fps: 30
+  chunk_overlap: 0
+  skip_completed: false
+  compute_raw_scalars: false
+  compress: false
+
+  # Background and arena mask commands
+  recompute_bg: false
+  use_plane_bground: false
+  bg_v2: true
+  manual_set_depth_range: false
+  camera_type: "auto"
+  detected_true_depth: "auto"
+  bg_roi_erode: [1, 1]
+  bg_roi_dilate: [10, 10]
+  bg_roi_gradient_kernel: 7
+  bg_roi_gradient_threshold: 3000
+  bg_roi_gradient_filter: false
+  bg_roi_depth_range: [650, 750]
+  bg_roi_sort_by_area: false
+  bg_roi_fill_holes: true
+  bg_roi_shape: "ellipse"
+  bg_roi_index: 0
+  bg_roi_weights: [1.0, 0.1, 1.0]
+
+  # Extraction-specific commands
+  erode_iterations: 0
+  dilate_iterations: 1
+  noise_tolerance: 30
+  chunk_size: 3000
+  frame_trim: [0, 0]
+  model_smoothing_clips: [0, 0]
+  max_height: 120
+  min_height: 10
+  crop_size: [80, 80]
+  use_cc: false
+  flip_classifier_smoothing: 51
+
+  # Filter parameters
+  angle_hampel_sig: 3
+  angle_hampel_span: 0
+  centroid_hampel_sig: 3
+  centroid_hampel_span: 0
+  temporal_filter_size: [0]
+  spatial_filter_size: [3]
+  tail_filter_shape: "ellipse"
+  tail_filter_size: [9, 9]
+  tail_filter_iters: 1
+  cable_filter_shape: "rectangle"
+  cable_filter_size: [5, 5]
+  cable_filter_iters: 0
+
+  # Tracking parameters
+  use_tracking_model: false
+  tracking_model_init: "raw"
+  tracking_model_segment: true
+  tracking_model_ll_clip: -100
+  tracking_model_mask_threshold: -16
+  tracking_model_ll_threshold: -100
+
+  # Data type parameters
+  pixel_format: "gray16le"
+  movie_dtype: "<u2"
+  frame_dtype: "uint8"
+  write_movie: true
