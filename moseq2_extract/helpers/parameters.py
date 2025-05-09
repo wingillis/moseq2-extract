@@ -1,7 +1,9 @@
 import cv2
+import joblib
 import warnings
 import numpy as np
 from typing import Literal
+from sklearn.pipeline import Pipeline
 from dataclasses import dataclass, field
 
 
@@ -70,6 +72,8 @@ class MouseProcessing:
     strel_tail: np.ndarray = field(init=False)
     strel_min: np.ndarray = field(init=False)  # for cable
 
+    flip_classifier_pipeline: Pipeline | None = field(init=False)
+
     def __post_init__(self):
         # Ensure spatial and temporal filter sizes are odd numbers
         orig_spatial_filter = tuple(self.spatial_filter_size)
@@ -98,6 +102,9 @@ class MouseProcessing:
         self.strel_min = cv2.getStructuringElement(
             strel_map[self.cable_filter_shape], self.cable_filter_size
         )
+
+        if self.flip_classifier is not None:
+            self.flip_classifier_pipeline = joblib.load(self.flip_classifier)
 
 
 @dataclass

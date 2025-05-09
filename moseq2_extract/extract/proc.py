@@ -12,6 +12,7 @@ import scipy.interpolate
 from pathlib import Path
 from copy import deepcopy
 from tqdm.auto import tqdm
+from sklearn.pipeline import Pipeline
 from moseq2_extract.extract.roi import plane_ransac
 from moseq2_extract.io.image import read_tiff, write_tiff
 from moseq2_extract.util import convert_pxs_to_mm, strided_app
@@ -19,7 +20,7 @@ from moseq2_extract.helpers.parameters import MouseProcessing, ArenaParams
 from moseq2_extract.io.video import get_movie_info, indexed_video_sequence
 
 
-def get_flips(frames, flip_file=None, smoothing=None):
+def get_flips(frames, flip_pipeline: Pipeline | None = None, smoothing=None):
     """
     Predict frames where mouse orientation is flipped to later correct.
 
@@ -32,22 +33,15 @@ def get_flips(frames, flip_file=None, smoothing=None):
     flips (numpy.array):  array for flips
     """
 
-    try:
-        clf = joblib.load(flip_file)
-    except IOError:
-        print(f"Could not open file {flip_file}")
-        raise
-
-    flip_class = np.where(clf.classes_ == 1)[0]
+    if flip_pipeline is not None:
+        flip_class = np.where(flip_pipeline.classes_ == 1)[0]
 
     try:
-        probas = clf.predict_proba(
-            frames.reshape((-1, frames.shape[1] * frames.shape[2]))
-        )
+        probas = flip_pipeline.predict_proba(frames)
     except ValueError:
-        if hasattr(clf, "n_features_") and int(np.sqrt(clf.n_features_)) != frames.shape[-1]:
+        if hasattr(flip_pipeline, "n_features_") and int(np.sqrt(flip_pipeline.n_features_)) != frames.shape[-1]:
             print('WARNING: Input crop-size is not compatible with flip classifier.')
-            accepted_crop = int(np.sqrt(clf.n_features_))
+            accepted_crop = int(np.sqrt(flip_pipeline.n_features_))
             print(f'Adjust the crop-size to ({accepted_crop}, {accepted_crop}) to use this flip classifier.')
         print("Frames shape:", frames.shape)
         print('The extracted data will NOT be flipped!')
@@ -57,7 +51,10 @@ def get_flips(frames, flip_file=None, smoothing=None):
         for i in range(probas.shape[1]):
             probas[:, i] = scipy.signal.medfilt(probas[:, i], smoothing)
 
-    flips = probas.argmax(axis=1) == flip_class
+    if flip_pipeline is not None:
+        flips = probas.argmax(axis=1) == flip_class
+    else:
+        flips = np.zeros(len(frames), dtype=bool)
 
     return flips
 

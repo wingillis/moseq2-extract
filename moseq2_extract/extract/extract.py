@@ -152,7 +152,7 @@ def extract_chunk(
     if mouse_proc_params.flip_classifier is not None:
         # get frame indices of incorrectly orientation
         flips = get_flips(
-            cropped_filtered_frames, mouse_proc_params.flip_classifier, mouse_proc_params.flip_classifier_smoothing
+            cropped_filtered_frames, mouse_proc_params.flip_classifier_pipeline, mouse_proc_params.flip_classifier_smoothing
         )
         flip_indices = np.where(flips)
 

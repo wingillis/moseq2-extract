@@ -26,7 +26,7 @@ dependencies = [
     "opencv-python-headless>=4.11.0.86",
     "ruamel-yaml>=0.18.10",
     "tifffile>=2025.3.30",
-    "imageio[ffmpeg,pyav]>=2.37.0",
+    "imageio>=2.37.0",
     "av>=14.3.0",
 ]
 

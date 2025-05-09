@@ -6,7 +6,6 @@ import av
 import os
 import cv2
 import numpy as np
-import imageio.v3 as iio
 import matplotlib.pyplot as plt
 from pathlib import Path
 from cytoolz import partition_all
@@ -178,9 +177,10 @@ def open_video_writer(filename, fps, depth_min, depth_max, cmap="jet"):
       writer: function that writes frames to the video file
     Automatically closes the file on exit.
     """
-    writer = iio.imopen(filename, "w", plugin="pyav")
-    writer.init_video_stream(codec="h264", fps=fps, pixel_format="yuv420p")
-    writer._video_stream.options = {"preset": "medium", "crf": "25"}
+    container = av.open(filename, mode='w')
+    stream = container.add_stream('h264', rate=int(fps))
+    stream.pix_fmt = 'yuv420p'
+    stream.options = {"preset": "medium", "crf": "25"}
 
     cmap = plt.get_cmap(cmap)
     font = cv2.FONT_HERSHEY_SIMPLEX
@@ -199,12 +199,17 @@ def open_video_writer(filename, fps, depth_min, depth_max, cmap="jet"):
             # len(frame_range) M < len(frames) or txt_pos is outside of the frame dimensions
             print("Could not overlay frame number on preview on video.")
 
-        writer.write_frame(frame)
+        av_frame = av.VideoFrame.from_ndarray(frame, format='rgb24')
+        for packet in stream.encode(av_frame):
+            container.mux(packet)
 
     try:
         yield write_frame
     finally:
-        writer.close()
+        # Flush the encoder
+        for packet in stream.encode():
+            container.mux(packet)
+        container.close()
 
 def write_frames_preview(frames, write_fun: callable, frame_range=None):
     """

@@ -3,6 +3,7 @@ CLI for extracting the depth data.
 """
 
 import click
+from pathlib import Path
 from moseq2_extract.cli_spec import (
     ROI_OPTIONS,
     AVI_OPTIONS,
@@ -22,7 +23,8 @@ from moseq2_extract.helpers.wrappers import (
     copy_slice_wrapper,
 )
 from moseq2_extract.helpers.extract import run_slurm_extract, run_local_extract
-from pathlib import Path
+from moseq2_extract.flip.train import train_classifier, save_classifier
+
 
 
 common_roi_options = option_spec(ROI_OPTIONS)
@@ -356,6 +358,18 @@ def copy_slice(
     copy_slice_wrapper(
         input_file, output_file, copy_slice, chunk_size, fps, delete
     )
+
+@cli.command(
+    name="train-flip-classifier",
+    help="Train a classifier to predict the orientation of a mouse.",
+)
+@click.option("--data-path", type=click.Path(exists=True, resolve_path=False), required=True, help="Path to the training data numpy file.")
+@click.option("--classifier", type=click.Choice(["SVM", "RF"]), default="SVM", help="Classifier to use.")
+@click.option("--n-components", type=int, default=20, help="Number of components to keep in PCA.")
+def train_flip_classifier(data_path, classifier, n_components):
+    clf = train_classifier(data_path, classifier, n_components)
+    save_classifier(clf, f"flip_classifier_{classifier}.p")
+
 
 
 if __name__ == "__main__":
