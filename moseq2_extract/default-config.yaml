@@ -41,6 +41,7 @@ extract:
   crop_size: [80, 80]
   use_cc: false
   flip_classifier_smoothing: 51
+  flip_classifier: null
 
   # Filter parameters
   angle_hampel_sig: 3
