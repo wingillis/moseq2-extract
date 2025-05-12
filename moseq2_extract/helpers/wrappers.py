@@ -288,7 +288,7 @@ def get_roi_wrapper(input_file, config_data, output_dir=None):
 
     # Sort arena masks by largest mean area
     if arena_params.bg_roi_sort_by_area:
-        rois = sorted(rois, key=lambda x: np.mean(x > 0), reverse=True)
+        rois = sorted(rois, key=lambda x: np.sum(x), reverse=True)
 
     if arena_params.bg_roi_index > len(rois):
         warnings.warn(

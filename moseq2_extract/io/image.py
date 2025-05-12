@@ -2,13 +2,11 @@
 Image reading/writing functionality.
 """
 
-import os
 import ast
 import json
 import numpy as np
 import imageio.v3 as iio
 from pathlib import Path
-from os.path import join
 
 
 def read_tiff_files(input_dir):
@@ -25,14 +23,15 @@ def read_tiff_files(input_dir):
 
     images = []
     filenames = []
-    for infile in os.listdir(input_dir):
-        if infile[-4:] == "tiff":
-            im = read_tiff(join(input_dir, infile))
+    input_path = Path(input_dir)
+    for infile in input_path.iterdir():
+        if infile.name.endswith("tiff"):
+            im = read_tiff(input_path / infile.name)
             if len(im.shape) == 2:
                 images.append(im)
             elif len(im.shape) == 3:
                 images.append(im[0])
-            filenames.append(infile)
+            filenames.append(infile.name)
 
     return images, filenames
 

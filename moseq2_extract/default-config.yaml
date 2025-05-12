@@ -23,7 +23,7 @@ extract:
   bg_roi_gradient_threshold: 3000
   bg_roi_gradient_filter: false
   bg_roi_depth_range: [650, 750]
-  bg_roi_sort_by_area: false
+  bg_roi_sort_by_area: true
   bg_roi_fill_holes: true
   bg_roi_shape: "ellipse"
   bg_roi_index: 0

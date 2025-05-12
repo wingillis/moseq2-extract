@@ -75,16 +75,8 @@ ROI_OPTIONS = [
         {"default": True, "type": bool, "help": "Fill holes in ROI"},
     ),
     (
-        ["--bg-sort-roi-by-position"],
-        {"default": False, "type": bool, "help": "Sort ROIs by position"},
-    ),
-    (
-        ["--bg-sort-roi-by-position-max-rois"],
-        {
-            "default": 2,
-            "type": int,
-            "help": "The number of maximum ROIs sorted by area",
-        },
+        ["--bg-sort-roi-by-area"],
+        {"default": True, "type": bool, "help": "Sort ROIs by area"},
     ),
     (
         ["--dilate-iterations"],

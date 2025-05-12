@@ -69,7 +69,7 @@ def plane_ransac(
     use_points = np.logical_and(
         depth_image > bg_roi_depth_range[0], depth_image < bg_roi_depth_range[1]
     )
-    if np.sum(use_points) <= 10:
+    if np.sum(use_points) <= 40**2:
         raise ValueError(
             f'Too few datapoints exist within given "bg roi depth range" {bg_roi_depth_range} -- data point count: {np.sum(use_points)}.'
             "Please adjust this parameter to fit your recording sessions."

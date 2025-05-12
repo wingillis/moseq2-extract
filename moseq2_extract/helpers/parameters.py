@@ -18,7 +18,7 @@ class ArenaParams:
     bg_roi_gradient_kernel: int = 7
     bg_roi_gradient_threshold: float = 3000
     bg_roi_fill_holes: bool = True
-    bg_roi_sort_by_area: bool = False
+    bg_roi_sort_by_area: bool = True
     bg_roi_erode: tuple[int, int] = (1, 1)
     bg_v2: bool = False
     erode_iterations: int = 0

@@ -199,7 +199,6 @@ def threshold_chunk(chunk: np.ndarray, min_height: int, max_height: int):
 
 def get_roi(depth_image,
             arena_params: ArenaParams,
-            overlap_roi=None,
             return_all_data=False,
             **kwargs):
     """
@@ -207,7 +206,6 @@ def get_roi(depth_image,
 
     Args:
         depth_image (np.ndarray): Singular depth image frame.
-        overlap_roi (np.ndarray): list of ROI boolean arrays to possibly combine.
         return_all_data (bool): If True, returns all ROI data, else, only return ROIs and computed Planes
         arena_params (ArenaParams): Arena parameters for ROI extraction. Refer to dataclass for documentation.
         kwargs (dict) Dictionary containing `bg_roi_depth_range` parameter for plane_ransac()
@@ -282,17 +280,6 @@ def get_roi(depth_image,
 
         rois.append(roi)
         bboxes.append(get_bbox(roi))
-
-    # Remove largest overlapping found ROI
-    if overlap_roi is not None:
-        overlaps = np.zeros_like(areas)
-
-        for i in range(len(rois)):
-            overlaps[i] = np.sum(np.logical_and(overlap_roi, rois[i]))
-
-        del_roi = np.argmax(overlaps)
-        del rois[del_roi]
-        del bboxes[del_roi]
 
     if return_all_data:
         return rois, roi_plane, bboxes, label_im, ranks, shape_index
