@@ -9,8 +9,9 @@ import click
 import warnings
 import numpy as np
 from pathlib import Path
-from cytoolz import valmap
 from ruamel.yaml import YAML
+from datetime import datetime
+from cytoolz import valmap, concat
 from moseq2_extract.io.image import write_tiff
 from ruamel.yaml.error import UnsafeLoaderWarning
 from moseq2_extract.io.video import get_movie_info
@@ -678,7 +679,7 @@ def h5_to_dict(h5file, path) -> dict:
     out (dict): a dict with h5 file contents with the same path structure
     """
 
-    if isinstance(h5file, str):
+    if isinstance(h5file, (str, Path)):
         with h5py.File(h5file, 'r') as f:
             out = _load_h5_to_dict(f, path)
     elif isinstance(h5file, h5py.File):
@@ -711,7 +712,7 @@ def clean_dict(dct: dict) -> dict:
 
     return valmap(clean_entry, dct)
 
-_underscorer = re.compile(r'(?<!^)(?=[A-Z])')
+_underscorer = re.compile(r'(?<!^)(?=[A-Z][a-z]+)')
 
 def camel_to_snake(s: str) -> str:
     """

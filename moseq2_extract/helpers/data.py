@@ -9,7 +9,7 @@ import numpy as np
 import moseq2_extract
 from pathlib import Path
 from tqdm.auto import tqdm
-from cytoolz import keymap, dissoc
+from cytoolz import keymap, dissoc, valmap
 from moseq2_extract.util import (
     h5_to_dict,
     load_timestamps,
@@ -84,7 +84,13 @@ def build_index_dict(files_to_use):
     return output_dict
 
 
-def load_extraction_meta_from_h5s(to_load, snake_case=True):
+def _bytes_to_str(item) -> str:
+    if isinstance(item, bytes):
+        return item.decode("utf-8")
+    return str(item)
+
+
+def load_extraction_meta_from_h5s(to_load: list[tuple[dict, Path]], snake_case=True):
     """
     Load extraction metadata from h5 files.
 
@@ -110,12 +116,12 @@ def load_extraction_meta_from_h5s(to_load, snake_case=True):
                 tmp = {}
 
         # note that everything going into here must be a string (no bytes!)
-        tmp = {k: str(v) for k, v in tmp.items()}
+        tmp = valmap(_bytes_to_str, tmp)
         if snake_case:
             tmp = keymap(camel_to_snake, tmp)
 
         # Specific use case block: Behavior reinforcement experiments
-        feedback_file = Path(_h5f).parent.parent / "feedback_ts.txt"
+        feedback_file = _h5f.parents[1] / "feedback_ts.txt"
         if feedback_file.exists():
             timestamps = map(int, load_timestamps(feedback_file, 0))
             feedback_status = map(int, load_timestamps(feedback_file, 1))
@@ -161,7 +167,7 @@ def build_manifest(loaded, format, snake_case=True):
         {
             "filename": "predictions.txt",
             "var_name": "realtime_predictions",
-            "dtype": np.int,
+            "dtype": int,
         }
     )
 
@@ -175,7 +181,7 @@ def build_manifest(loaded, format, snake_case=True):
     )
 
     for _dict, _h5f in loaded:
-        print_format = f"{format}_{Path(_h5f).stem}"
+        print_format = f"{format}_{_h5f.stem}"
         if not _dict["extraction_metadata"]:
             copy_path = fallback.format(fallback_count)
             fallback_count += 1
@@ -184,10 +190,10 @@ def build_manifest(loaded, format, snake_case=True):
                 copy_path = build_path(
                     _dict["extraction_metadata"], print_format, snake_case=snake_case
                 )
-            except:
+            except Exception as e:
+                print(f"Error building path: {e}")
                 copy_path = fallback.format(fallback_count)
                 fallback_count += 1
-                pass
 
         # add a bonus dictionary here to be copied to h5 file itself
         manifest[_h5f] = {
@@ -196,7 +202,7 @@ def build_manifest(loaded, format, snake_case=True):
             "additional_metadata": {},
         }
         for meta in additional_meta:
-            filename = Path(_h5f).parents[1] / meta["filename"]
+            filename = _h5f.parents[1] / meta["filename"]
             if filename.exists():
                 try:
                     data, timestamps = load_textdata(filename, dtype=meta["dtype"])
@@ -204,7 +210,7 @@ def build_manifest(loaded, format, snake_case=True):
                         "data": data,
                         "timestamps": timestamps,
                     }
-                except:
+                except Exception:
                     warnings.warn(
                         "WARNING: Did not load timestamps! This may cause issues if total dropped frames > 2% of the session."
                     )
