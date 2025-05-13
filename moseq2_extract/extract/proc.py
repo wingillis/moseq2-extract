@@ -103,7 +103,7 @@ def find_smoothest_background(frames: np.ndarray) -> np.ndarray:
     return bground_options[q]
 
 
-def get_bground_im_file(frames_file: str | Path, frame_stride=250, med_scale=5, output_dir=None, **kwargs):
+def get_bground_im_file(frames_file: str | Path, frame_stride=250, med_scale=5, output_dir=None, bg_v2=False, **kwargs):
     """
     Load or compute background from file.
 
@@ -145,7 +145,7 @@ def get_bground_im_file(frames_file: str | Path, frame_stride=250, med_scale=5, 
     
     frame_store = np.array(frame_store).astype('float32')
 
-    if kwargs.get("bg_v2", False):
+    if bg_v2:
         # run an optimization to determine the smoothest quantile to sample from
         bground = find_smoothest_background(frame_store)
     else:
