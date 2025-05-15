@@ -116,18 +116,6 @@ def common_roi_options(function):
         "--bg-roi-fill-holes", default=True, type=bool, help="Fill holes in ROI"
     )(function)
     function = click.option(
-        "--bg-sort-roi-by-position",
-        default=False,
-        type=bool,
-        help="Sort ROIs by position",
-    )(function)
-    function = click.option(
-        "--bg-sort-roi-by-position-max-rois",
-        default=2,
-        type=int,
-        help="The number of maximum ROIs sorted by area",
-    )(function)
-    function = click.option(
         "--dilate-iterations",
         default=1,
         type=int,
