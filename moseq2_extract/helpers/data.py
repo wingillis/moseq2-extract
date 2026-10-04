@@ -387,8 +387,11 @@ def create_extract_h5(
     h5_file["metadata/extraction/roi"].attrs["description"] = "ROI mask"
 
     # First Frame
+    # (release received a (1, H, W) stack and indexed [0]; the modern reader
+    # returns a 2D frame directly - normalize to 2D either way)
+    first_frame_2d = first_frame[0] if first_frame.ndim == 3 else first_frame
     h5_file.create_dataset(
-        "metadata/extraction/first_frame", data=first_frame[0], compression="gzip"
+        "metadata/extraction/first_frame", data=first_frame_2d, compression="gzip"
     )
     h5_file["metadata/extraction/first_frame"].attrs[
         "description"

@@ -403,12 +403,26 @@ def extract_wrapper(input_file, output_dir, config_data, num_frames=None, skip=F
     # ensure 'get_cmd' and 'run_cmd' are not in config_data or get_bground_im_file will fail
     config_data = dissoc(config_data, "get_cmd", "run_cmd", "extensions")
 
+    # Re-merge the dataclass-filtered parameters into the serialized parameter
+    # record so h5/yaml outputs keep the full release-era parameter set
+    # (downstream tools read these from results_00.h5).
+    def _serializable_fields(params_obj):
+        out = {}
+        for fname, fobj in type(params_obj).__dataclass_fields__.items():
+            if fobj.init:
+                out[fname] = getattr(params_obj, fname)
+        return out
+
     status_dict = {
         "complete": False,
         "skip": False,
         "uuid": str(uuid.uuid4()),
         "metadata": "",
-        "parameters": deepcopy(config_data),
+        "parameters": {
+            **deepcopy(config_data),
+            **_serializable_fields(mouse_proc_params),
+            **_serializable_fields(em_tracking_params),
+        },
     }
 
     # loads metadata dictionary and timestamp array.

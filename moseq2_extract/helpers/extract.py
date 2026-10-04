@@ -153,17 +153,30 @@ def process_extract_batches(
         mouse_proc_params.min_height,
         mouse_proc_params.max_height,
     ) as preview_writer:
+        # Bound reading to the requested extraction window (num-frames /
+        # frame-trim), matching release gen_batch_sequence(last_frame_idx,
+        # chunk_size, overlap, offset=first_frame_idx) semantics. Without
+        # this, -n/--num-frames and --frame-trim are ignored and the whole
+        # recording is processed.
+        first_frame_idx = kwargs.get("first_frame_idx", 0)
+        last_frame_idx = kwargs.get(
+            "last_frame_idx", config_data["finfo"]["nframes"]
+        )
         for i, (frame_range, raw_chunk) in enumerate(tqdm(
             batched_video_reader(
                 input_file,
                 batch_size=config_data["chunk_size"],
                 frame_size=bground_im.shape[::-1],
-                n_frames=config_data['finfo']["nframes"],
+                n_frames=last_frame_idx,
+                offset=first_frame_idx,
                 overlap=config_data["chunk_overlap"],
                 **config_data,
             ),
             desc="Loading batches",
-            total=ceil(config_data["finfo"]["nframes"] / (config_data["chunk_size"] - config_data["chunk_overlap"])),
+            total=ceil(
+                (last_frame_idx - first_frame_idx)
+                / (config_data["chunk_size"] - config_data["chunk_overlap"])
+            ),
         )):
 
             offset = config_data["chunk_overlap"] if i > 0 else 0

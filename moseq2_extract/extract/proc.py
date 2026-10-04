@@ -138,6 +138,11 @@ def get_bground_im_file(frames_file: str | Path, frame_stride=250, med_scale=5, 
     
     frame_store = np.array(frame_store).astype('float32')
 
+    # numpy >= 1.22 preserves float32 through nanquantile/nanmedian, while the
+    # release-era numpy 1.18 upcast to float64. Compute the background in
+    # float64 to preserve release output dtype and numeric behavior.
+    frame_store = frame_store.astype('float64')
+
     if bg_v2:
         # run an optimization to determine the smoothest quantile to sample from
         bground = find_smoothest_background(frame_store)

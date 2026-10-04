@@ -239,22 +239,39 @@ def avi_reader(path) -> Iterator[np.ndarray]:
 
 
 def avi_video_sequence(file_path: Path, indices: np.ndarray) -> Iterator[np.ndarray]:
+    """Yield frames at the given (0-based) frame indices from an AVI file.
+
+    The previous implementation seeked by timestamp and returned the first
+    decoded frame, which lands on a keyframe-adjacent frame rather than the
+    requested index whenever the container has a non-trivial GOP. Decoding
+    sequentially and matching frames by pts/index is exact for the ffv1 AVIs
+    MoSeq writes (no B-frames, pts == frame index in decode order).
+    """
     with av.open(file_path) as container:
-        container.streams.video[0].thread_type = "AUTO"
         stream = container.streams.video[0]
+        stream.thread_type = "AUTO"
 
-        for index in indices:
-            # compute timestamp in seconds for the nth frame
-            frame_rate = float(stream.average_rate)
-            time_s = index / frame_rate
+        rate = float(stream.average_rate) if stream.average_rate else None
+        time_base = float(stream.time_base) if stream.time_base else None
 
-            # convert to stream.time_base units (pts)
-            target_pts = int(time_s / float(stream.time_base))
+        wanted = sorted({int(i) for i in indices})
+        wi = 0
+        decoded = 0
+        for frame in container.decode(stream):
+            if frame.pts is not None and rate and time_base:
+                index = int(round(frame.pts * time_base * rate))
+            else:
+                index = decoded
+            decoded += 1
 
-            # seek to the closest keyframe at or before the target pts
-            container.seek(target_pts, any_frame=False, backward=True, stream=stream)
-            frame = next(container.decode(stream))
-            yield frame.to_ndarray()
+            while wi < len(wanted) and wanted[wi] < index:
+                # requested frame no longer reachable (bad index); skip it
+                wi += 1
+            if wi < len(wanted) and wanted[wi] == index:
+                yield frame.to_ndarray()
+                wi += 1
+            if wi >= len(wanted):
+                return
 
 
 def indexed_video_sequence(
@@ -310,8 +327,11 @@ def batched_video_reader(
             buf = deque(maxlen=overlap)
             idx_buf = deque(maxlen=overlap)
 
+            # never read past the requested extraction window [offset, n_frames)
+            batch_end = min(offset + batch_size, n_frames)
+
             # prime the buffer
-            for idx in range(offset, offset + batch_size):
+            for idx in range(offset, batch_end):
                 try:
                     frame = next(reader)
                 except StopIteration:
@@ -320,7 +340,7 @@ def batched_video_reader(
                 idx_buf.append(idx)
                 yield idx, frame
 
-            start = offset + batch_size
+            start = batch_end
             # slide by unique frames
             for indices in partition_all(unique, range(start, n_frames)):
 
