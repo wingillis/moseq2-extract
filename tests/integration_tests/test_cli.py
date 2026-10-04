@@ -4,12 +4,11 @@ import glob
 import click
 import shutil
 import numpy as np
-import ruamel.yaml as yaml
 from os.path import exists
 import numpy.testing as npt
 from unittest import TestCase
 from click.testing import CliRunner
-from moseq2_extract.util import read_yaml
+from moseq2_extract.util import read_yaml, write_yaml
 from moseq2_extract.cli import (
     find_roi,
     extract,
@@ -114,8 +113,7 @@ class CLITests(TestCase):
         config_data = read_yaml(config_file)
         config_data["flip_classifier"] = None
 
-        with open(config_file, "w+") as f:
-            yaml.safe_dump(config_data, f)
+        write_yaml(config_file, config_data)
 
         write_fake_movie(data_path)
         assert os.path.isfile(data_path), "fake movie was not written"
@@ -218,7 +216,7 @@ class CLITests(TestCase):
 
         runner = CliRunner()
         result = runner.invoke(generate_config, ["--output-file", data_path])
-        yaml_data = yaml.load("data/", Loader=yaml.RoundTripLoader)
+        yaml_data = read_yaml("data/test_config.yaml")
         temp_p = extract.params
         params = [param for param in temp_p if type(temp_p) is click.core.Option]
 

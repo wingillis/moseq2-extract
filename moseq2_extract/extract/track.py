@@ -5,8 +5,9 @@ Expectation-Maximization mouse tracking utilities.
 import cv2
 import numpy as np
 import scipy.stats
-from tqdm.auto import tqdm
 import statsmodels.stats.correlation_tools as stats_tools
+from tqdm.auto import tqdm
+from moseq2_extract.helpers.parameters import EMTrackingModel
 
 
 def em_iter(data, mean, cov, lamd=0.1, epsilon=1e-1, max_iter=25):
@@ -56,17 +57,17 @@ def em_init(
     depth_frame,
     depth_floor,
     depth_ceiling,
-    init_strel=cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (9, 9)),
+    init_strel,
     strel_iters=1,
 ):
     """
     Estimate depth frame contours using OpenCV, and select the largest chosen contour to initialize a mask for EM tracking.
 
     Args:
-    depth_frame (numpy.ndarray): depth frame to initialize mask with.
+    depth_frame (np.ndarray): depth frame to initialize mask with.
     depth_floor (float): distance from camera to bucket floor.
     depth_ceiling (float): max depth value.
-    init_strel (cv2.structuringElement): structuring Element to compute mask.
+    init_strel (np.ndarray): structuring Element to compute mask.
     strel_iters (int): number of morphological iterations.
 
     Returns:
@@ -95,18 +96,11 @@ def em_init(
 def em_tracking(
     frames,
     raw_frames,
-    segment=True,
-    ll_threshold=-30,
-    rho_mean=0,
-    rho_cov=0,
     depth_floor=10,
     depth_ceiling=100,
     progress_bar=True,
-    init_mean=None,
-    init_cov=None,
     init_frames=10,
-    init_method="raw",
-    init_strel=cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (9, 9)),
+    params: EMTrackingModel | None = None,
 ):
     """
     Naive tracker, use EM update rules to follow a 3D Gaussian around the room.
@@ -114,18 +108,10 @@ def em_tracking(
     Args:
     frames (numpy.ndarray): filtered frames.
     raw_frames (numpy.ndarray): chunk to track mouse in.
-    segment (bool): use only the largest blob for em updates
-    ll_threshold (float): threshold on log likelihood for segmentation
-    rho_mean (float): smoothing parameter for the mean
-    rho_cov (float): smoothing parameter for the covariance
     depth_floor (float): height in mm for separating mouse from floor
     depth_ceiling (float): max height in mm for mouse from floor.
     progress_bar (bool): display progress bar.
-    init_mean (np.ndarray): array of inital frame pixel means.
-    init_cov (np.ndarray): array of inital frame pixel covariances.
     init_frames (int): number of frames to include in the init calulation
-    init_method (str): mode in which to process inputs
-    init_strel (cv2.structuringElement): structuring Element to compute mask.
 
     Returns:
     model_parameters (dict): mean and covariance estimates for each frame
@@ -138,29 +124,29 @@ def em_tracking(
     coords = np.vstack((xx.ravel(), yy.ravel()))
     xyz = np.vstack((coords, frames[0].ravel()))
 
-    if init_mean is None or init_cov is None:
-        if init_method == "min":
+    if params.tracking_model_init_mean is None or params.tracking_model_init_cov is None:
+        if params.tracking_model_init == "min":
             use_frame = np.min(frames[:init_frames], axis=0)
-        elif init_method == "med":
+        elif params.tracking_model_init == "med":
             use_frame = np.median(frames[:init_frames], axis=0)
-        elif init_method == "raw":
+        elif params.tracking_model_init == "raw":
             use_frame = frames[0]
 
         mouse_mask = em_init(
             use_frame,
             depth_floor=depth_floor,
             depth_ceiling=depth_ceiling,
-            init_strel=init_strel,
+            init_strel=params.tracking_model_init_strel,
         )
         include_pixels = mouse_mask.ravel()
 
-        if init_mean is None:
+        if params.tracking_model_init_mean is None:
             try:
                 mean = np.mean(xyz[:, include_pixels], axis=1)
             except Exception:
                 mean = np.mean(xyz, axis=1)
 
-        if init_cov is None:
+        if params.tracking_model_init_cov is None:
             try:
                 cov = stats_tools.cov_nearest(np.cov(xyz[:, include_pixels]))
             except Exception:
@@ -169,8 +155,8 @@ def em_tracking(
         if np.any(np.isnan(mean)):
             mean = np.mean(xyz, axis=1)
     else:
-        mean = init_mean
-        cov = init_cov
+        mean = params.tracking_model_init_mean
+        cov = params.tracking_model_init_cov
 
     model_parameters = {
         "mean": np.empty((nframes, 3), "float64"),
@@ -200,10 +186,10 @@ def em_tracking(
         # if we try to find contours and we fail, repeat with the base initialization
         # if THAT fails, go back to the unfiltered frame and repeat base initialization
         # if THAT fails, just set all the pixels to true (tracking is hopeless, get the mouse in later frames)
-        if segment and not repeat:
+        if params.tracking_model_segment and not repeat:
             try:
                 cnts, hierarchy = cv2.findContours(
-                    (pxtheta_im > ll_threshold).astype("uint8"),
+                    (pxtheta_im > params.tracking_model_ll_threshold).astype("uint8"),
                     cv2.RETR_TREE,
                     cv2.CHAIN_APPROX_SIMPLE,
                 )
@@ -218,7 +204,7 @@ def em_tracking(
                 use_cnt = tmp.argmax()
                 mask = np.zeros_like(pxtheta_im)
                 cv2.drawContours(mask, cnts, use_cnt, (255), cv2.FILLED)
-        elif segment and repeat:
+        elif params.tracking_model_segment and repeat:
             # basically try each step in succession, first try to get contours
             # if that fails try re-initialization, if that fails try re-initialization
             # with raw data, if that fails give up and use all of the pixels
@@ -226,19 +212,19 @@ def em_tracking(
                 frames[i],
                 depth_floor=depth_floor,
                 depth_ceiling=depth_ceiling,
-                init_strel=init_strel,
+                init_strel=params.tracking_model_init_strel,
             )
             if np.all(mask == 0):
                 mask = em_init(
                     raw_frames[i],
                     depth_floor=depth_floor,
                     depth_ceiling=depth_ceiling,
-                    init_strel=init_strel,
+                    init_strel=params.tracking_model_init_strel,
                 )
                 if np.all(mask == 0):
                     mask = np.ones(pxtheta_im.shape, dtype="bool")
         else:
-            mask = pxtheta_im > ll_threshold
+            mask = pxtheta_im > params.tracking_model_ll_threshold
 
         tmp = mask.ravel() > 0
         tmp[np.logical_or(xyz[2] <= depth_floor, xyz[2] >= depth_ceiling)] = 0
@@ -271,14 +257,11 @@ def em_tracking(
         # exponential smoothers for mean and covariance if
         # you want (easier to do this offline)
         # leave these set to 0 for now
-        mean = (1 - rho_mean) * mean_update + rho_mean * mean
-        cov = (1 - rho_cov) * cov_update + rho_cov * cov
+        mean = (1 - params.smoothing_rho) * mean_update + params.smoothing_rho * mean
+        cov = (1 - params.smoothing_rho) * cov_update + params.smoothing_rho * cov
 
         model_parameters["mean"][i] = mean
         model_parameters["cov"][i] = cov
-
-        # TODO: add the walk-back where we use the
-        # raw frames in case our update craps out...
 
         repeat = False
         i += 1

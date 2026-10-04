@@ -1,0 +1,60 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+dynamic = ["version"]
+name = "moseq2-extract"
+authors = [
+    {name = "Datta Lab"}
+]
+description = "To boldly go where no mouse has gone before"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "h5py>=3.13.0",
+    "tqdm>=4.67.1",
+    "scipy>=1.15.2",
+    "numpy>=2.2.5",
+    "click>=8.1.8",
+    "joblib>=1.4.2",
+    "cytoolz>=1.0.1",
+    "matplotlib>=3.10.1",
+    "statsmodels>=0.14.4",
+    "scikit-image>=0.25.2",
+    "scikit-learn>=1.6.1",
+    "opencv-python-headless>=4.11.0.86",
+    "ruamel-yaml>=0.18.10",
+    "tifffile>=2025.3.30",
+    "imageio>=2.37.0",
+    "av>=14.2.0",
+]
+
+[project.optional-dependencies]
+docs = [
+    "sphinx",
+    "sphinx-click", 
+    "sphinx-rtd-theme"
+]
+dev = [
+    "pylint>=3.3.7",
+]
+
+[project.scripts]
+moseq2-extract = "moseq2_extract.cli:cli"
+
+# Optional development tools configuration
+[tool.black]
+line-length = 100
+target-version = ['py311']
+
+[tool.isort]
+profile = "black"
+multi_line_output = 3
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["moseq2_extract*"]
+
+[tool.setuptools.dynamic]
+version = {attr = "moseq2_extract.__version__"}

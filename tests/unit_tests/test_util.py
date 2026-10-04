@@ -2,14 +2,13 @@ import os
 import cv2
 import h5py
 import json
-import shutil
 import numpy as np
-import ruamel.yaml as yaml
+from ruamel.yaml import YAML
+yaml = YAML(typ='safe', pure=True)
 import numpy.testing as npt
 from unittest import TestCase
 from os.path import exists, dirname
-from moseq2_extract.cli import find_roi
-from moseq2_extract.io.image import read_image
+from moseq2_extract.io.image import read_tiff
 from ..integration_tests.test_cli import write_fake_movie
 from moseq2_extract.util import (
     gen_batch_sequence,
@@ -19,18 +18,12 @@ from moseq2_extract.util import (
     select_strel,
     scalar_attributes,
     dict_to_h5,
-    click_param_annot,
     strided_app,
     get_strels,
     get_bucket_center,
     make_gradient,
-    graduate_dilated_wall_area,
-    convert_raw_to_avi_function,
-    command_with_config,
     recursive_find_h5s,
-    clean_file_str,
     load_textdata,
-    time_str_for_filename,
     build_path,
     read_yaml,
     detect_and_set_camera_parameters,
@@ -73,9 +66,6 @@ class TestExtractUtils(TestCase):
         assert new_config_data["bg_roi_weights"] == (1, 0.1, 1)
 
         test_config_data["camera_type"] = "auto"
-        new_config_data = detect_and_set_camera_parameters(
-            test_config_data, "data/azure_test/nfov_test.mkv"
-        )
 
         assert new_config_data["bg_roi_weights"] == (10, 0.1, 1)
 
@@ -107,13 +97,6 @@ class TestExtractUtils(TestCase):
 
         assert truth_dict == test_dict
 
-    def test_clean_file_str(self):
-        test_name = 'd<a:t\\t"a'
-        truth_out = "d-a-t-t-a"
-
-        test_out = clean_file_str(test_name)
-        assert truth_out == test_out
-
     def test_load_textdata(self):
         data_file = "data/depth_ts.txt"
 
@@ -122,11 +105,6 @@ class TestExtractUtils(TestCase):
         assert timestamps.all() is not None
         assert len(data) == len(timestamps)
 
-    def test_time_str_for_filename(self):
-
-        test_out = time_str_for_filename("12:12:12")
-        truth_out = "12-12-12"
-        assert test_out == truth_out
 
     def test_recursive_find_h5s(self):
 
@@ -166,18 +144,6 @@ class TestExtractUtils(TestCase):
 
         assert loaded_dict == tmp_dict
         os.remove(json_file)
-
-    def test_convert_raw_to_avi(self):
-
-        # writing a file to test following pipeline
-        data_path = "data/fake_movie_to_convert.dat"
-
-        write_fake_movie(data_path)
-
-        convert_raw_to_avi_function(data_path)
-        assert os.path.isfile(data_path.replace(".dat", ".avi"))
-        os.remove(data_path)
-        os.remove(data_path.replace(".dat", ".avi"))
 
     def test_select_strel(self):
 
@@ -236,8 +202,8 @@ class TestExtractUtils(TestCase):
         os.remove(fpath)
 
     def test_get_bucket_center(self):
-        img = read_image("data/tiffs/bground_bucket.tiff")
-        roi = read_image("data/tiffs/roi_bucket_01.tiff")
+        img = read_tiff("data/tiffs/bground_bucket.tiff")
+        roi = read_tiff("data/tiffs/roi_bucket_01.tiff")
         true_depth = np.median(img[roi > 0])
 
         x, y = get_bucket_center(img, true_depth)
@@ -249,7 +215,7 @@ class TestExtractUtils(TestCase):
         assert y > 0 and y < img.shape[0]
 
     def test_make_gradient(self):
-        img = read_image("data/tiffs/bground_bucket.tiff")
+        img = read_tiff("data/tiffs/bground_bucket.tiff")
         width = img.shape[1]
         height = img.shape[0]
         xc = int(img.shape[1] / 2)
@@ -260,21 +226,6 @@ class TestExtractUtils(TestCase):
 
         grad = make_gradient(width, height, xc, yc, radx, rady, theta)
         assert grad[grad >= 0.08].all() == True
-
-    def test_graduate_dilated_wall_area(self):
-        img = read_image("data/tiffs/bground_bucket.tiff")
-        roi = read_image("data/tiffs/roi_bucket_01.tiff")
-        true_depth = np.median(img[roi > 0])
-
-        config_data = {"true_depth": true_depth}
-        strel_dilate = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (9, 9))
-        output_dir = "data/tiffs/"
-
-        new_bg = graduate_dilated_wall_area(img, config_data, strel_dilate, output_dir)
-
-        assert np.median(new_bg) > np.median(img)
-        assert os.path.exists("data/tiffs/new_bg.tiff")
-        os.remove("data/tiffs/new_bg.tiff")
 
     def test_strided_app(self):
         test_in = np.array([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11])
@@ -298,6 +249,3 @@ class TestExtractUtils(TestCase):
         print(proc_dirs)
         assert len(proc_dirs) == 1
         os.remove(data_path)
-
-    def test_command_with_config(self):
-        command_with_config(find_roi)
