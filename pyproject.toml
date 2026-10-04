@@ -10,7 +10,7 @@ authors = [
 ]
 description = "To boldly go where no mouse has gone before"
 readme = "README.md"
-requires-python = ">=3.11"
+requires-python = ">=3.12"
 dependencies = [
     "h5py>=3.13.0",
     "tqdm>=4.67.1",
