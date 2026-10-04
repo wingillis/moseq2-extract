@@ -413,6 +413,12 @@ def option_spec(spec_list: list[tuple]):
 
     def decorator(fn):
         for args, kwargs in reversed(spec_list):
+            kwargs = dict(kwargs)
+            # click >= 8.3 leaves flag defaults as an internal UNSET sentinel;
+            # older click reported False. Pin the historical default so config
+            # generation and YAML round-trips see a plain bool.
+            if kwargs.get("is_flag") and "default" not in kwargs:
+                kwargs["default"] = False
             fn = click.option(*args, **kwargs)(fn)
         return fn
 

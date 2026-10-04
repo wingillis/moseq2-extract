@@ -119,6 +119,9 @@ def em_tracking(
 
     # initialize the mean and covariance
 
+    if params is None:
+        params = EMTrackingModel()
+
     nframes, r, c = frames.shape
     xx, yy = np.meshgrid(np.arange(frames.shape[2]), np.arange(frames.shape[1]))
     coords = np.vstack((xx.ravel(), yy.ravel()))

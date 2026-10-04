@@ -480,8 +480,10 @@ def crop_and_rotate_frames(frames, features, crop_size=(80, 80), progress_bar=Fa
             continue
 
         # Rotate the frame such that the mouse is oriented facing east
-        rot_mat = cv2.getRotationMatrix2D((crop_size[0] // 2, crop_size[1] // 2),
-                                          -np.rad2deg(features['orientation'][i]), 1)
+        # (cv2 >= 5 rejects numpy scalars; pass native Python numbers)
+        rot_mat = cv2.getRotationMatrix2D(
+            (int(crop_size[0] // 2), int(crop_size[1] // 2)),
+            float(-np.rad2deg(features['orientation'][i])), 1.0)
         cropped_frames[i] = cv2.warpAffine(use_frame[rr[0]:rr[-1], cc[0]:cc[-1]],
                                            rot_mat, (crop_size[0], crop_size[1]))
 

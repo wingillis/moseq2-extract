@@ -75,12 +75,13 @@ def read_frames_raw(
         yield data[idx]
 
 
-def get_avi_metadata(path: Path) -> int:
+def get_avi_metadata(path: Path) -> dict:
     with av.open(path, 'r') as container:
         video_stream = container.streams.video[0]
         # get width, height
         width = video_stream.width
         height = video_stream.height
+        average_rate = video_stream.average_rate
 
         # try the container‐reported frame count first
         n = video_stream.frames
@@ -91,7 +92,7 @@ def get_avi_metadata(path: Path) -> int:
     return {
         "nframes": n,
         "dims": (width, height),
-        "fps": video_stream.average_rate,
+        "fps": average_rate,
         "bytes": width * height * 2 * n,  # each pixel is 2 bytes
     }
 
@@ -362,13 +363,13 @@ def batched_video_reader(
 
 
 def get_movie_info(
-    filename: Path, frame_size: tuple[int, int] = (512, 424), bit_depth: int = 16, **kwargs
+    filename: Path | str, frame_size: tuple[int, int] = (512, 424), bit_depth: int = 16, **kwargs
 ) -> dict[str, Any]:
     """
     Return dict of movie metadata.
 
     Args:
-    filename (Path): path to video file
+    filename (Path | str): path to video file
     frame_size (tuple): video dimensions
     bit_depth (int): integer indicating data type encoding
 
@@ -376,6 +377,7 @@ def get_movie_info(
     metadata (dict): dictionary containing video file metadata
     """
 
+    filename = Path(filename)
     if filename.suffix == ".dat":
         metadata = get_raw_info(
             filename, frame_size=frame_size, bit_depth=bit_depth

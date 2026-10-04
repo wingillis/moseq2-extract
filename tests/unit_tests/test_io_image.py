@@ -2,7 +2,7 @@ import os
 import numpy as np
 import numpy.testing as npt
 from unittest import TestCase
-from skimage.external import tifffile
+import tifffile
 from moseq2_extract.io.image import write_tiff, read_tiff, read_tiff_files
 
 
@@ -16,9 +16,8 @@ class TestImageIO(TestCase):
         write_tiff(data_path, rnd_img, scale=False)
 
         with tifffile.TiffFile(data_path) as tif:
-            tmp = tif
+            image = tif.asarray().astype("uint16")
 
-        image = tmp.asarray().astype("uint16")
         npt.assert_almost_equal(rnd_img, image, 3)
         assert os.path.isfile(data_path)
         os.remove(data_path)

@@ -1,0 +1,7 @@
+.git
+*.egg-info
+__pycache__
+*.pyc
+Documentation.pdf
+media
+tests/integration_tests/test_data

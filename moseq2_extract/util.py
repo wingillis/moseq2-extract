@@ -4,6 +4,7 @@ General utility functions throughout the extract package.
 import re
 import cv2
 import json
+import math
 import h5py
 import click
 import warnings
@@ -289,17 +290,18 @@ def generate_missing_metadata(sess_dir, sess_name):
     with open(Path(sess_dir) / 'metadata.json', 'w') as fp:
         json.dump(sample_meta, fp)
 
-def load_metadata(metadata_file: Path):
+def load_metadata(metadata_file: Path | str):
     """
     Load metadata from session metadata.json file.
 
     Args:
-    metadata_file (Path): path to metadata file
+    metadata_file (Path | str): path to metadata file
 
     Returns:
     metadata (dict): metadata dictionary of JSON contents
     """
 
+    metadata_file = Path(metadata_file)
     if metadata_file.exists():
         with open(metadata_file, 'r') as f:
             metadata = json.load(f)
@@ -339,6 +341,60 @@ def load_found_session_paths(input_dir: str | Path, exts: list[str] | str) -> li
         exts = [exts]
 
     return sorted(concat(input_dir.glob('**/*' + ext) for ext in exts))
+
+
+def make_gradient(width, height, h, k, a, b, theta=0):
+    """
+    Create gradient around bucket floor representing slanted wall values.
+
+    Args:
+    width (int): bounding box width
+    height (int) bounding box height
+    h (int): centroid x coordinate
+    k (int): centroid y coordinate
+    a (int): x-radius of drawn ellipse
+    b (int): y-radius of drawn ellipse
+    theta (float): degree to rotate ellipse in radians. (has no effect if drawing a circle)
+
+    Returns:
+    np.ndarray: numpy array with weighted values representing the proportion of values
+    to create a gradient from, highest closest to the circle wall.
+    """
+
+    # https://stackoverflow.com/questions/49829783/draw-a-gradual-change-ellipse-in-skimage/49848093#49848093
+    # Precalculate constants
+    st, ct = math.sin(theta), math.cos(theta)
+    aa, bb = a ** 2, b ** 2
+
+    # Generate (x,y) coordinate arrays
+    y, x = np.mgrid[-k:height - k, -h:width - h]
+
+    # Calculate the weight for each pixel
+    weights = (((x * ct + y * st) ** 2) / aa) + (((x * st - y * ct) ** 2) / bb)
+
+    return np.clip(0.98 - weights, 0, 0.81)
+
+
+def get_strels(config_data):
+    """
+    Get dictionary object of cv2 StructuringElements for image filtering given
+    a dict of configurations parameters.
+
+    Args:
+    config_data (dict): dict containing cv2 Structuring Element parameters
+
+    Returns:
+    str_els (dict): dict containing cv2 StructuringElements used for image filtering
+    """
+
+    str_els = {
+        'strel_dilate': select_strel(config_data['bg_roi_shape'], tuple(config_data['bg_roi_dilate'])),
+        'strel_erode': select_strel(config_data['bg_roi_shape'], tuple(config_data['bg_roi_erode'])),
+        'strel_tail': select_strel(config_data['tail_filter_shape'], tuple(config_data['tail_filter_size'])),
+        'strel_min': select_strel(config_data['cable_filter_shape'], tuple(config_data['cable_filter_size']))
+    }
+
+    return str_els
 
 
 def select_strel(string='e', size=(10, 10)):
@@ -668,7 +724,17 @@ def _load_h5_to_dict(file: h5py.File, path) -> dict:
     ans = {}
     for key, item in file[path].items():
         if isinstance(item, h5py._hl.dataset.Dataset):
-            ans[key] = item[()]
+            val = item[()]
+            # h5py >= 3 returns bytes for variable-length strings; restore the
+            # str values that h5py 2.x (release environment) used to return.
+            if isinstance(val, bytes):
+                val = val.decode('utf-8')
+            elif isinstance(val, np.ndarray) and val.dtype == object:
+                val = np.array(
+                    [v.decode('utf-8') if isinstance(v, bytes) else v for v in val],
+                    dtype=object,
+                )
+            ans[key] = val
         elif isinstance(item, h5py._hl.group.Group):
             ans[key] = _load_h5_to_dict(file, '/'.join([path, key]))
     return ans
@@ -712,7 +778,7 @@ def clean_dict(dct: dict) -> dict:
         elif isinstance(e, np.ndarray):
             out = e.tolist()
         elif isinstance(e, np.generic):
-            out = np.asscalar(e)
+            out = e.item()
         else:
             out = e
         return out

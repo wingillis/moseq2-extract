@@ -191,7 +191,11 @@ class TestExtractUtils(TestCase):
                 path = path + "/"
             for key, item in h5file[path].items():
                 if type(item) is h5py.Dataset:
-                    ans[key] = item[()]
+                    val = item[()]
+                    # h5py >= 3 returns bytes for variable-length strings
+                    if isinstance(val, bytes):
+                        val = val.decode("utf-8")
+                    ans[key] = val
                 elif type(item) is h5py.Group:
                     ans[key] = h5_to_dict(h5file, path + key + "/")
             return ans

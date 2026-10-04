@@ -115,7 +115,7 @@ def extract(input_file, output_dir, num_frames, skip_completed, **kwargs):
 @click.option(
     "--get-cmd", is_flag=True, default=True, help="Print scan command strings."
 )
-@click.option("--run-cmd", is_flag=True, help="Run scan command strings.")
+@click.option("--run-cmd", is_flag=True, default=False, help="Run scan command strings.")
 @click.option(
     "--extract-out-script",
     type=click.Path(),
@@ -132,6 +132,7 @@ def extract(input_file, output_dir, num_frames, skip_completed, **kwargs):
 @click.option(
     "--skip-checks",
     is_flag=True,
+    default=False,
     help="Flag: skip checks for the existence of a metadata file",
 )
 @common_roi_options

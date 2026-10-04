@@ -46,7 +46,7 @@ class TestHelperExtract(TestCase):
             )
 
             write_extracted_chunk_to_h5(
-                f, results, config_data, scalars, frame_range, offset
+                f, results, scalars, frame_range, offset
             )
 
         assert os.path.exists(out_file)
@@ -165,7 +165,7 @@ class TestHelperExtract(TestCase):
         assert os.path.isfile(data_path), "fake movie was not written correctly"
 
         with open(config_path, "r") as f:
-            params = yaml.safe_load(f)
+            params = yaml.load(f)
 
         prefix = ""
 

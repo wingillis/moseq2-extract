@@ -18,6 +18,7 @@ from moseq2_extract.extract.proc import (
     feature_hampel_filter,
     _area_px_to_mm2,
 )
+from moseq2_extract.helpers.parameters import MouseProcessing
 
 
 class TestExtractProc(TestCase):
@@ -102,7 +103,9 @@ class TestExtractProc(TestCase):
 
         for i, rotation in enumerate(rotations):
 
-            rot_mat = cv2.getRotationMatrix2D(tuple(center), rotation, 1)
+            rot_mat = cv2.getRotationMatrix2D(
+                (float(center[1]), float(center[0])), float(rotation), 1.0
+            )
             fake_movie[i] = cv2.warpAffine(
                 tmp_image.astype("float32"), rot_mat, (80, 80)
             )
@@ -254,7 +257,9 @@ class TestExtractProc(TestCase):
         fake_mouse[fake_mouse < 5] = 0
 
         fake_movie = np.tile(fake_mouse, (100, 1, 1))
-        cleaned_fake_movie = clean_frames(fake_movie, prefilter_time=(3,))
+        cleaned_fake_movie = clean_frames(
+            fake_movie, MouseProcessing(temporal_filter_size=(3,))
+        )
 
     def test_feature_hampel_filter(self):
 

@@ -6,9 +6,10 @@ from moseq2_extract.io.video import (
     read_frames_raw,
     get_raw_info,
     encode_depth_to_avi,
+    encode_depth_to_avi_batch,
     get_movie_info,
     write_frames_preview,
-    get_movie_info,
+    open_video_writer,
     avi_reader,
 )
 
@@ -21,7 +22,7 @@ class TestVideoIO(TestCase):
         test_data = np.random.randint(0, 256, size=(300, 424, 512), dtype="int16")
         test_data.tofile(data_path)
 
-        read_data = read_frames_raw(data_path)
+        read_data = np.array(list(read_frames_raw(data_path)))
         npt.assert_array_equal(test_data, read_data)
         os.remove(data_path)
 
@@ -47,9 +48,15 @@ class TestVideoIO(TestCase):
         data_path = "data/fake_ffv1_depth.avi"
 
         test_data = np.random.randint(0, 256, size=(300, 424, 512), dtype="int16")
-        test_data.tofile(data_path)
 
-        encode_depth_to_avi(data_path, test_data, fps=30)
+        with encode_depth_to_avi(
+            data_path,
+            fps=30,
+            height=test_data.shape[1],
+            width=test_data.shape[2],
+        ) as writer:
+            encode_depth_to_avi_batch(test_data, writer)
+
         read_data = np.array(list(avi_reader(data_path)))
 
         vid_info = get_movie_info(data_path)
@@ -62,12 +69,11 @@ class TestVideoIO(TestCase):
 
     def test_write_frames_preview(self):
 
-        data_path = "data/fake_preview_depth.avi"
+        data_path = "data/fake_preview_depth.mp4"
 
-        test_data = np.random.randint(0, 256, size=(300, 424, 512), dtype="int16")
-        write_frames_preview(
-            data_path, test_data, fps=30, frame_range=range(len(test_data))
-        )
+        test_data = np.random.randint(0, 256, size=(30, 424, 512), dtype="int16")
+        with open_video_writer(data_path, 30, 10, 120) as write_fun:
+            write_frames_preview(test_data, write_fun, frame_range=range(len(test_data)))
         os.remove(data_path)
 
     def test_get_movie_info(self):
@@ -77,7 +83,13 @@ class TestVideoIO(TestCase):
 
         test_data = np.random.randint(0, 256, size=(300, 424, 512), dtype="int16")
 
-        encode_depth_to_avi(avi_path, test_data, fps=30)
+        with encode_depth_to_avi(
+            avi_path,
+            fps=30,
+            height=test_data.shape[1],
+            width=test_data.shape[2],
+        ) as writer:
+            encode_depth_to_avi_batch(test_data, writer)
         test_data.tofile(dat_path)
 
         vid_info = get_movie_info(avi_path)

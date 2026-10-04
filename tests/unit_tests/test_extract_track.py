@@ -3,6 +3,7 @@ import numpy.testing as npt
 from unittest import TestCase
 import statsmodels.stats.correlation_tools as stats_tools
 from moseq2_extract.extract.track import em_get_ll, em_tracking
+from moseq2_extract.helpers.parameters import EMTrackingModel
 
 
 def make_fake_movie():
@@ -64,7 +65,9 @@ class TestEMTracking(TestCase):
 
         for init in ["raw", "min", "med"]:
             parameters = em_tracking(
-                frames=fake_movie, raw_frames=fake_movie, init_method=init
+                frames=fake_movie,
+                raw_frames=fake_movie,
+                params=EMTrackingModel(tracking_model_init=init),
             )
 
             # this is very loose atm, need to figure out what's going on here...
