@@ -68,7 +68,9 @@ def _legacy_flip_unpickler():
     from sklearn.tree._tree import NODE_DTYPE, Tree
 
     class _PatchedTree(Tree):
-        """Tree subclass that pads old (pre-1.3) node arrays on load."""
+        """Tree subclass that pads old (pre-1.3) node arrays on load and
+        normalizes leaf counts (pre-0.22 pickles stored raw weighted counts;
+        modern trees expect probabilities in `value`)."""
 
         def __setstate__(self, state):
             nodes = state.get("nodes") if isinstance(state, dict) else (
@@ -81,6 +83,15 @@ def _legacy_flip_unpickler():
                     state = dict(state, nodes=padded)
                 else:
                     state = (padded,) + tuple(state[1:])
+            # normalize per-node class counts so predict_proba matches the
+            # behavior of scikit-learn < 0.22 (which divided at predict time)
+            values = state.get("values") if isinstance(state, dict) else (
+                state[1] if isinstance(state, (tuple, list)) else None)
+            if values is not None and values.ndim == 3:
+                totals = values.sum(axis=2, keepdims=True)
+                totals[totals == 0] = 1.0
+                state = (dict(state, values=values / totals) if isinstance(state, dict)
+                         else (state[0], values / totals) + tuple(state[2:]))
             super().__setstate__(state)
 
     class _LegacyFlipUnpickler(NumpyUnpickler):
