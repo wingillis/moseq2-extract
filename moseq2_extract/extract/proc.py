@@ -39,12 +39,20 @@ def get_flips(frames, flip_pipeline: Pipeline | None = None, smoothing=None):
     # Bare estimators (e.g. the published K2 random forests) are trained on
     # flattened frames, matching release behavior; sklearn Pipelines built
     # from image transformers (blur/mask) expect frames x rows x columns.
-    if isinstance(flip_pipeline, Pipeline):
-        probas = flip_pipeline.predict_proba(frames)
+    if hasattr(flip_pipeline, "predict_proba"):
+        if isinstance(flip_pipeline, Pipeline):
+            probas = flip_pipeline.predict_proba(frames)
+        else:
+            probas = flip_pipeline.predict_proba(
+                frames.reshape((-1, frames.shape[1] * frames.shape[2]))
+            )
     else:
-        probas = flip_pipeline.predict_proba(
-            frames.reshape((-1, frames.shape[1] * frames.shape[2]))
-        )
+        # Older/classifier pipelines without calibrated probabilities
+        # (e.g. an SVC fitted without probability=True) expose predict()
+        # only; convert the labels to one-hot columns so the median-filter
+        # smoothing below still applies as a majority vote.
+        labels = (flip_pipeline.predict(frames) == 1).astype(np.float64)
+        probas = np.stack([1.0 - labels, labels], axis=1)
 
     if smoothing:
         for i in range(probas.shape[1]):
