@@ -324,7 +324,7 @@ def validate_flip_classifier(config_data):
     if not flip_classifier:
         return
 
-    if not exists(flip_classifier):
+    if not Path(flip_classifier).exists():
         return
 
     crop_size = config_data.get("crop_size", (80, 80))
