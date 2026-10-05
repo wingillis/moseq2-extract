@@ -1,5 +1,7 @@
 import cv2
 import joblib
+
+from moseq2_extract.helpers.compat import load_flip_classifier
 import warnings
 import numpy as np
 from typing import Literal
@@ -104,7 +106,9 @@ class MouseProcessing:
         )
 
         if self.flip_classifier is not None:
-            self.flip_classifier_pipeline = joblib.load(self.flip_classifier)
+            self.flip_classifier_pipeline = load_flip_classifier(
+                self.flip_classifier
+            )
 
 
 @dataclass

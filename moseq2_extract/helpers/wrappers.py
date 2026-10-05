@@ -8,6 +8,8 @@ import uuid
 import h5py
 import shutil
 import joblib
+
+from moseq2_extract.helpers.compat import load_flip_classifier
 import warnings
 import numpy as np
 import urllib.request
@@ -328,7 +330,7 @@ def validate_flip_classifier(config_data):
     crop_size = config_data.get("crop_size", (80, 80))
 
     try:
-        clf = joblib.load(flip_classifier)
+        clf = load_flip_classifier(flip_classifier)
     except Exception:
         return
 
