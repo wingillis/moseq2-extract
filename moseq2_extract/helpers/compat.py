@@ -111,6 +111,25 @@ def _load_patching_legacy_trees(path):
         return unpickler_cls(path, f, ensure_native_byte_order=False).load()
 
 
+def _patch_legacy_estimators(obj, seen=None):
+    """Add the modern `estimator` template to pre-1.2 forest pickles."""
+    import sklearn.tree
+
+    if seen is None:
+        seen = set()
+    if id(obj) in seen:
+        return obj
+    seen.add(id(obj))
+    if hasattr(obj, "estimators_") and not hasattr(obj, "estimator"):
+        obj.estimator = sklearn.tree.DecisionTreeClassifier()
+    for attr in ("estimators_",):
+        for sub in getattr(obj, attr, []) or []:
+            _patch_legacy_estimators(sub, seen)
+    for step in getattr(obj, "steps", []) or []:
+        _patch_legacy_estimators(step[1] if len(step) > 1 else step, seen)
+    return obj
+
+
 def load_flip_classifier(path):
     """Load a flip classifier pickle, tolerating legacy scikit-learn layouts."""
     try:
@@ -119,10 +138,10 @@ def load_flip_classifier(path):
         # Estimator classes moved to private modules; alias and retry.
         install_legacy_sklearn_aliases()
         try:
-            return joblib.load(path)
+            return _patch_legacy_estimators(joblib.load(path))
         except ValueError:
             pass
     except ValueError:
         pass
     # Old decision-tree node arrays need padding; re-unpickle with fixes.
-    return _load_patching_legacy_trees(path)
+    return _patch_legacy_estimators(_load_patching_legacy_trees(path))
