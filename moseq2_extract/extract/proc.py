@@ -36,9 +36,15 @@ def get_flips(frames, flip_pipeline: Pipeline | None = None, smoothing=None):
     if flip_pipeline is not None:
         flip_class = np.where(flip_pipeline.classes_ == 1)[0]
 
-    # Upstream release behavior (fail fast on incompatible classifier) is
-    # preserved: crop-size mismatch must raise, not silently disable flipping.
-    probas = flip_pipeline.predict_proba(frames)
+    # Bare estimators (e.g. the published K2 random forests) are trained on
+    # flattened frames, matching release behavior; sklearn Pipelines built
+    # from image transformers (blur/mask) expect frames x rows x columns.
+    if isinstance(flip_pipeline, Pipeline):
+        probas = flip_pipeline.predict_proba(frames)
+    else:
+        probas = flip_pipeline.predict_proba(
+            frames.reshape((-1, frames.shape[1] * frames.shape[2]))
+        )
 
     if smoothing:
         for i in range(probas.shape[1]):
