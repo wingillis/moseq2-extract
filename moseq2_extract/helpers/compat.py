@@ -1,18 +1,25 @@
 """Helpers for loading flip classifiers pickled by older scikit-learn versions.
 
 Pre-trained flip classifiers in the wild (e.g. the published K2 random
-forests) were pickled with scikit-learn < 0.22, which stored estimator
-classes under module paths that were later made private
-(``sklearn.ensemble.forest`` -> ``sklearn.ensemble._forest`` etc.).  Those
-legacy paths no longer exist, so unpickling fails with a ``ModuleNotFoundError``
-on modern scikit-learn even though the estimator state itself is compatible.
+forests) were pickled with scikit-learn < 0.22, and modern scikit-learn
+cannot load them for two reasons:
 
-``load_flip_classifier`` retries the load after mapping the legacy module
-names onto their modern equivalents in ``sys.modules``.  The mapping is only
-installed when a plain load fails, and never overrides modules that already
-exist.
+1. Estimator classes were stored under module paths that were later made
+   private (``sklearn.ensemble.forest`` -> ``sklearn.ensemble._forest``),
+   which now raise ``ModuleNotFoundError``.
+2. Decision-tree node arrays (scikit-learn < 1.3) lack the
+   ``missing_go_to_left`` field that modern trees expect, raising a
+   ``ValueError`` about an incompatible node dtype.
+
+``load_flip_classifier`` first tries a plain ``joblib.load``.  On failure it
+retries with legacy module aliases installed, and finally retries with a
+custom unpickler that maps legacy module names and transparently pads the
+node arrays of old trees (the padding value is 0, matching old trees that
+never routed missing values).  All of this only runs when a plain load
+fails; classifiers pickled with modern scikit-learn are unaffected.
 """
 
+import gzip
 import importlib
 import sys
 
@@ -54,12 +61,68 @@ def install_legacy_sklearn_aliases():
             pass
 
 
+def _legacy_flip_unpickler():
+    """Build an unpickler class that fixes legacy sklearn references."""
+    import numpy as np
+    from joblib.numpy_pickle import NumpyUnpickler
+    from sklearn.tree._tree import NODE_DTYPE, Tree
+
+    class _PatchedTree(Tree):
+        """Tree subclass that pads old (pre-1.3) node arrays on load."""
+
+        def __setstate__(self, state):
+            nodes = state.get("nodes") if isinstance(state, dict) else (
+                state[0] if isinstance(state, (tuple, list)) else None)
+            if nodes is not None and nodes.dtype != NODE_DTYPE:
+                padded = np.zeros(nodes.shape[0], dtype=NODE_DTYPE)
+                for name in nodes.dtype.names:
+                    padded[name] = nodes[name]
+                if isinstance(state, dict):
+                    state = dict(state, nodes=padded)
+                else:
+                    state = (padded,) + tuple(state[1:])
+            super().__setstate__(state)
+
+    class _LegacyFlipUnpickler(NumpyUnpickler):
+        def find_class(self, module, name):
+            if module == "sklearn.tree._tree" and name == "Tree":
+                return _PatchedTree
+            if module in _LEGACY_SKLEARN_MODULES:
+                modern = _LEGACY_SKLEARN_MODULES[module]
+                try:
+                    mod = sys.modules.get(modern) or importlib.import_module(modern)
+                    return getattr(mod, name)
+                except (ImportError, AttributeError):
+                    pass
+            return super().find_class(module, name)
+
+    return _LegacyFlipUnpickler
+
+
+def _load_patching_legacy_trees(path):
+    # gzip and raw pickles cover the published classifiers; anything else
+    # falls back to a plain open.
+    with open(path, "rb") as f:
+        head = f.read(2)
+    file_opener = gzip.open if head == b"\x1f\x8b" else open
+
+    unpickler_cls = _legacy_flip_unpickler()
+    with file_opener(path, "rb") as f:
+        return unpickler_cls(path, f, ensure_native_byte_order=False).load()
+
+
 def load_flip_classifier(path):
-    """Load a flip classifier pickle, tolerating legacy scikit-learn modules."""
+    """Load a flip classifier pickle, tolerating legacy scikit-learn layouts."""
     try:
         return joblib.load(path)
     except (ModuleNotFoundError, AttributeError):
-        # Fall back to aliasing legacy sklearn module paths (removed in
-        # scikit-learn >= 1.0) and retry once.
+        # Estimator classes moved to private modules; alias and retry.
         install_legacy_sklearn_aliases()
-        return joblib.load(path)
+        try:
+            return joblib.load(path)
+        except ValueError:
+            pass
+    except ValueError:
+        pass
+    # Old decision-tree node arrays need padding; re-unpickle with fixes.
+    return _load_patching_legacy_trees(path)
