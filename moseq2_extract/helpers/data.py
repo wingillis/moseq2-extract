@@ -2,44 +2,43 @@
 Contains helper functions for handling/storing data during extraction.
 """
 
-import os
 import h5py
 import shutil
-import tarfile
 import warnings
 import numpy as np
-import ruamel.yaml as yaml
+import moseq2_extract
+from pathlib import Path
 from tqdm.auto import tqdm
-from cytoolz import keymap
-from pkg_resources import get_distribution
-from moseq2_extract.io.video import load_timestamps_from_movie
-from os.path import exists, join, dirname, basename, splitext
+from cytoolz import keymap, dissoc, valmap
 from moseq2_extract.util import (
     h5_to_dict,
     load_timestamps,
     load_metadata,
     read_yaml,
+    write_yaml,
     camel_to_snake,
     load_textdata,
     build_path,
     dict_to_h5,
     click_param_annot,
 )
+from moseq2_extract.helpers.parameters import MouseProcessing
 
 
-def check_completion_status(status_filename):
+def check_completion_status(status_filename: str | Path):
     """
     Read a results_00.yaml (status file) and checks whether the session has been
     fully extracted.
 
     Args:
-    status_filename (str): path to results_00.yaml
+    status_filename: path to results_00.yaml
 
     Returns:
     complete (bool): If True, data has been extracted to completion.
     """
+    status_filename = Path(status_filename)
 
-    if exists(status_filename):
+    if status_filename.exists():
         return read_yaml(status_filename)["complete"]
     return False
 
@@ -85,7 +84,13 @@ def build_index_dict(files_to_use):
     return output_dict
 
 
-def load_extraction_meta_from_h5s(to_load, snake_case=True):
+def _bytes_to_str(item) -> str:
+    if isinstance(item, bytes):
+        return item.decode("utf-8")
+    return str(item)
+
+
+def load_extraction_meta_from_h5s(to_load: list[tuple[dict, Path]], snake_case=True):
     """
     Load extraction metadata from h5 files.
 
@@ -111,13 +116,13 @@ def load_extraction_meta_from_h5s(to_load, snake_case=True):
                 tmp = {}
 
         # note that everything going into here must be a string (no bytes!)
-        tmp = {k: str(v) for k, v in tmp.items()}
+        tmp = valmap(_bytes_to_str, tmp)
         if snake_case:
             tmp = keymap(camel_to_snake, tmp)
 
         # Specific use case block: Behavior reinforcement experiments
-        feedback_file = join(dirname(_h5f), "..", "feedback_ts.txt")
-        if exists(feedback_file):
+        feedback_file = _h5f.parents[1] / "feedback_ts.txt"
+        if feedback_file.exists():
             timestamps = map(int, load_timestamps(feedback_file, 0))
             feedback_status = map(int, load_timestamps(feedback_file, 1))
             _dict["feedback_timestamps"] = list(zip(timestamps, feedback_status))
@@ -162,7 +167,7 @@ def build_manifest(loaded, format, snake_case=True):
         {
             "filename": "predictions.txt",
             "var_name": "realtime_predictions",
-            "dtype": np.int,
+            "dtype": int,
         }
     )
 
@@ -176,7 +181,7 @@ def build_manifest(loaded, format, snake_case=True):
     )
 
     for _dict, _h5f in loaded:
-        print_format = f"{format}_{splitext(basename(_h5f))[0]}"
+        print_format = f"{format}_{_h5f.stem}"
         if not _dict["extraction_metadata"]:
             copy_path = fallback.format(fallback_count)
             fallback_count += 1
@@ -185,10 +190,10 @@ def build_manifest(loaded, format, snake_case=True):
                 copy_path = build_path(
                     _dict["extraction_metadata"], print_format, snake_case=snake_case
                 )
-            except:
+            except Exception as e:
+                print(f"Error building path: {e}")
                 copy_path = fallback.format(fallback_count)
                 fallback_count += 1
-                pass
 
         # add a bonus dictionary here to be copied to h5 file itself
         manifest[_h5f] = {
@@ -197,15 +202,15 @@ def build_manifest(loaded, format, snake_case=True):
             "additional_metadata": {},
         }
         for meta in additional_meta:
-            filename = join(dirname(_h5f), "..", meta["filename"])
-            if exists(filename):
+            filename = _h5f.parents[1] / meta["filename"]
+            if filename.exists():
                 try:
                     data, timestamps = load_textdata(filename, dtype=meta["dtype"])
                     manifest[_h5f]["additional_metadata"][meta["var_name"]] = {
                         "data": data,
                         "timestamps": timestamps,
                     }
-                except:
+                except Exception:
                     warnings.warn(
                         "WARNING: Did not load timestamps! This may cause issues if total dropped frames > 2% of the session."
                     )
@@ -213,115 +218,72 @@ def build_manifest(loaded, format, snake_case=True):
     return manifest
 
 
-def copy_manifest_results(manifest, output_dir):
+def copy_manifest_results(manifest: dict, output_dir: str):
     """
     Copy all consolidated manifest results to their respective output files.
 
     Args:
     manifest (dict): manifest dictionary containing all extraction h5 metadata to save
     output_dir (str): path to directory where extraction results will be aggregated.
-
     """
 
-    if not exists(output_dir):
-        os.makedirs(output_dir)
+    output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
 
     # now the key is the source h5 file and the value is the path to copy to
     for k, v in tqdm(manifest.items(), desc="Copying files"):
+        h5_path = Path(k)
 
-        if exists(join(output_dir, f'{v["copy_path"]}.h5')):
+        if (copy_path := (output_dir / f'{v["copy_path"]}.h5')).exists():
             continue
 
-        in_basename = splitext(basename(k))[0]
-        in_dirname = dirname(k)
+        mp4_path = h5_path.with_suffix(".mp4")
 
-        h5_path = k
-        mp4_path = join(in_dirname, f"{in_basename}.mp4")
-
-        if exists(h5_path):
-            new_h5_path = join(output_dir, f'{v["copy_path"]}.h5')
-            shutil.copyfile(h5_path, new_h5_path)
+        if h5_path.exists():
+            shutil.copyfile(h5_path, copy_path)
 
         # if we have additional_meta then crack open the h5py and write to a safe place
         if len(v["additional_metadata"]) > 0:
             for k2, v2 in v["additional_metadata"].items():
                 new_key = f"/metadata/misc/{k2}"
-                with h5py.File(new_h5_path, "a") as f:
+                with h5py.File(copy_path, "a") as f:
                     f.create_dataset(f"{new_key}/data", data=v2["data"])
                     f.create_dataset(f"{new_key}/timestamps", data=v2["timestamps"])
 
-        if exists(mp4_path):
-            shutil.copyfile(mp4_path, join(output_dir, f'{v["copy_path"]}.mp4'))
+        if mp4_path.exists():
+            shutil.copyfile(mp4_path, copy_path.with_suffix(".mp4"))
 
-        v["yaml_dict"].pop("extraction_metadata", None)
-        with open(f'{join(output_dir, v["copy_path"])}.yaml', "w") as f:
-            yaml.safe_dump(v["yaml_dict"], f)
+        write_yaml(
+            copy_path.with_suffix(".yaml"),
+            dissoc(v["yaml_dict"], "extraction_metadata"),
+        )
 
 
-def handle_extract_metadata(input_file, dirname):
+def handle_extract_metadata(input_file):
     """
     Extract metadata and timestamp in the extraction.
 
     Args:
-    input_file (str): path to input file to extract
-    dirname (str): path to directory where extraction files reside.
+    input_file (Path): path to input file to extract
 
     Returns:
     acquisition_metadata (dict): key-value pairs of JSON contents
     timestamps (1D array): list of loaded timestamps
-    tar (bool): indicator for whether the file is compressed.
     """
 
-    tar = None
-    tar_members = None
-    alternate_correct = False
-    from_depth_file = False
+    # Handling paths for other important files
+    metadata_path = input_file.with_name("metadata.json")
+    timestamp_path = input_file.with_name("depth_ts.txt")
+    alternate_timestamp_path = input_file.with_name("timestamps.csv")
 
-    # Handle TAR files
-    if input_file.endswith((".tar.gz", ".tgz")):
-        print(f"Scanning tarball {input_file} (this will take a minute)")
-        # compute NEW psuedo-dirname now, `input_file` gets overwritten below with test_vid.dat tarinfo...
-        dirname = join(
-            dirname, basename(input_file).replace(".tar.gz", "").replace(".tgz", "")
-        )
-
-        tar = tarfile.open(input_file, "r:gz")
-        tar_members = tar.getmembers()
-        tar_names = [_.name for _ in tar_members]
-
-    if tar is not None:
-        # Handling tar paths
-        metadata_path = tar.extractfile(tar_members[tar_names.index("metadata.json")])
-        if "depth_ts.txt" in tar_names:
-            timestamp_path = tar.extractfile(
-                tar_members[tar_names.index("depth_ts.txt")]
-            )
-        elif "timestamps.csv" in tar_names:
-            timestamp_path = tar.extractfile(
-                tar_members[tar_names.index("timestamps.csv")]
-            )
-            alternate_correct = True
-    else:
-        # Handling non-compressed session paths
-        metadata_path = join(dirname, "metadata.json")
-        timestamp_path = join(dirname, "depth_ts.txt")
-        alternate_timestamp_path = join(dirname, "timestamps.csv")
-        # Checks for alternative timestamp file if original .txt extension does not exist
-        if not exists(timestamp_path) and exists(alternate_timestamp_path):
-            timestamp_path = alternate_timestamp_path
-            alternate_correct = True
-        elif not (
-            exists(timestamp_path) or exists(alternate_timestamp_path)
-        ) and input_file.endswith(".mkv"):
-            from_depth_file = True
+    # Checks for alternative timestamp file if original .txt version does not exist
+    if alternate_correct := (not timestamp_path.exists() and alternate_timestamp_path.exists()):
+        timestamp_path = alternate_timestamp_path
 
     acquisition_metadata = load_metadata(metadata_path)
-    if not from_depth_file:
-        timestamps = load_timestamps(timestamp_path, col=0, alternate=alternate_correct)
-    else:
-        timestamps = load_timestamps_from_movie(input_file)
+    timestamps = load_timestamps(timestamp_path, col=0, alternate=alternate_correct)
 
-    return acquisition_metadata, timestamps, tar
+    return acquisition_metadata, timestamps
 
 
 # extract h5 helper function
@@ -337,6 +299,7 @@ def create_extract_h5(
     first_frame,
     first_frame_idx,
     last_frame_idx,
+    mouse_proc_params: MouseProcessing,
     **kwargs,
 ):
     """
@@ -378,37 +341,32 @@ def create_extract_h5(
     # Cropped Frames
     h5_file.create_dataset(
         "frames",
-        (nframes, config_data["crop_size"][0], config_data["crop_size"][1]),
+        (nframes, *mouse_proc_params.crop_size),
         config_data["frame_dtype"],
         compression="gzip",
     )
     h5_file["frames"].attrs["description"] = (
         "3D Numpy array of depth frames (nframes x w x h)." + " Depth values are in mm."
     )
+
     # Frame Masks for EM Tracking
-    if config_data["use_tracking_model"]:
-        h5_file.create_dataset(
-            "frames_mask",
-            (nframes, config_data["crop_size"][0], config_data["crop_size"][1]),
-            "float32",
-            compression="gzip",
-        )
-        h5_file["frames_mask"].attrs[
-            "description"
-        ] = "Log-likelihood values from the tracking model (nframes x w x h)"
+    if mouse_proc_params.use_tracking_model:
+        fm_dtype = "float32"
+        desc = "Log-likelihood values from the tracking model (nframes x w x h)"
     else:
-        h5_file.create_dataset(
-            "frames_mask",
-            (nframes, config_data["crop_size"][0], config_data["crop_size"][1]),
-            "bool",
-            compression="gzip",
-        )
-        h5_file["frames_mask"].attrs[
-            "description"
-        ] = "Boolean mask, false=not mouse, true=mouse"
+        fm_dtype = "bool"
+        desc = "Boolean mask, false=not mouse, true=mouse"
+    
+    h5_file.create_dataset(
+        "frames_mask",
+        (nframes, *mouse_proc_params.crop_size),
+        fm_dtype,
+        compression="gzip",
+    )
+    h5_file["frames_mask"].attrs["description"] = desc
 
     # Flip Classifier
-    if config_data["flip_classifier"] is not None:
+    if mouse_proc_params.flip_classifier is not None:
         h5_file.create_dataset(
             "metadata/extraction/flips", (nframes,), "bool", compression="gzip"
         )
@@ -429,8 +387,11 @@ def create_extract_h5(
     h5_file["metadata/extraction/roi"].attrs["description"] = "ROI mask"
 
     # First Frame
+    # (release received a (1, H, W) stack and indexed [0]; the modern reader
+    # returns a 2D frame directly - normalize to 2D either way)
+    first_frame_2d = first_frame[0] if first_frame.ndim == 3 else first_frame
     h5_file.create_dataset(
-        "metadata/extraction/first_frame", data=first_frame[0], compression="gzip"
+        "metadata/extraction/first_frame", data=first_frame_2d, compression="gzip"
     )
     h5_file["metadata/extraction/first_frame"].attrs[
         "description"
@@ -463,8 +424,8 @@ def create_extract_h5(
     ] = "Computed background image"
 
     # Extract Version
-    extract_version = np.string_(get_distribution("moseq2-extract").version)
-    h5_file.create_dataset("metadata/extraction/extract_version", data=extract_version)
+    h5_file.create_dataset("metadata/extraction/extract_version",
+                           data=moseq2_extract.__version__)
     h5_file["metadata/extraction/extract_version"].attrs[
         "description"
     ] = "Version of moseq2-extract"
@@ -481,7 +442,7 @@ def create_extract_h5(
 
     # Acquisition Metadata
     for key, value in acquisition_metadata.items():
-        if type(value) is list and len(value) > 0 and type(value[0]) is str:
+        if isinstance(value, list) and len(value) > 0 and isinstance(value[0], str):
             value = [n.encode("utf8") for n in value]
 
         if value is not None:

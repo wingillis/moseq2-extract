@@ -1,24 +1,42 @@
 """
 General utility functions throughout the extract package.
 """
-import os
 import re
 import cv2
-import math
 import json
+import math
 import h5py
 import click
-import tarfile
 import warnings
 import numpy as np
-from glob import glob
-from copy import deepcopy
-import ruamel.yaml as yaml
-from typing import Pattern
-from cytoolz import valmap
-from moseq2_extract.io.image import write_image
+from pathlib import Path
+from ruamel.yaml import YAML
+from datetime import datetime
+from cytoolz import valmap, concat
+from moseq2_extract.io.image import write_tiff
+from ruamel.yaml.error import UnsafeLoaderWarning
 from moseq2_extract.io.video import get_movie_info
-from os.path import join, exists, splitext, basename, abspath, dirname
+
+# provides a definition for each scalar recorded in h5 file
+SCALAR_ATTRIBUTES = {
+    'centroid_x_px': 'X centroid (pixels)',
+    'centroid_y_px': 'Y centroid (pixels)',
+    'velocity_2d_px': '2D velocity (pixels / frame), note that missing frames are not accounted for',
+    'velocity_3d_px': '3D velocity (pixels / frame), note that missing frames are not accounted for, also height is in mm, not pixels for calculation',
+    'width_px': 'Mouse width (pixels)',
+    'length_px': 'Mouse length (pixels)',
+    'area_px': 'Mouse area (pixels)',
+    'centroid_x_mm': 'X centroid (mm)',
+    'centroid_y_mm': 'Y centroid (mm)',
+    'velocity_2d_mm': '2D velocity (mm / frame), note that missing frames are not accounted for',
+    'velocity_3d_mm': '3D velocity (mm / frame), note that missing frames are not accounted for',
+    'width_mm': 'Mouse width (mm)',
+    'length_mm': 'Mouse length (mm)',
+    'area_mm': 'Mouse area (mm^2)',
+    'height_ave_mm': 'Mouse average height (mm)',
+    'angle': 'Angle (radians, unwrapped)',
+    'velocity_theta': 'Angular component of velocity (arctan(vel_x, vel_y))'
+}
 
 
 def filter_warnings(func):
@@ -35,79 +53,14 @@ def filter_warnings(func):
     """
     def apply_warning_filters(*args, **kwargs):
         with warnings.catch_warnings():
-            warnings.simplefilter('ignore', yaml.error.UnsafeLoaderWarning)
+            warnings.simplefilter('ignore', UnsafeLoaderWarning)
             warnings.simplefilter(action='ignore', category=FutureWarning)
             warnings.simplefilter(action='ignore', category=UserWarning)
             return func(*args, **kwargs)
     return apply_warning_filters
 
 
-# from https://stackoverflow.com/questions/46358797/
-# python-click-supply-arguments-and-options-from-a-configuration-file
-def command_with_config(config_file_param_name):
-    """
-    Override default CLI variables with the values contained within the config.yaml being passed.
-
-    Args:
-    config_file_param_name (str): path to config file.
-
-    Returns:
-    custom_command_class (function): decorator function to update click.Command parameters with the config_file
-    parameter values.
-    """
-
-    class custom_command_class(click.Command):
-
-        def invoke(self, ctx):
-            # grab the config file
-            config_file = ctx.params[config_file_param_name]
-            param_defaults = {p.human_readable_name: p.default for p in self.params
-                              if isinstance(p, click.core.Option)}
-            param_defaults = {k: tuple(v) if type(v) is list else v for k, v in param_defaults.items()}
-            param_cli = {k: tuple(v) if type(v) is list else v for k, v in ctx.params.items()}
-
-            if config_file is not None:
-
-                config_data = read_yaml(config_file)
-                # set config_data['output_file'] ['output_dir'] ['input_dir'] to None to avoid overwriting previous files
-                # assuming users would either input their own paths or use the default path
-                config_data['input_dir'] = None
-                config_data['output_dir'] = None
-                config_data['output_file'] = None
-
-                # modified to only use keys that are actually defined in options and the value is not not none
-                config_data = {k: tuple(v) if isinstance(v, yaml.comments.CommentedSeq) else v
-                               for k, v in config_data.items() if k in param_defaults.keys() and v is not None}
-
-                # find differences btw config and param defaults
-                diffs = set(param_defaults.items()) ^ set(param_cli.items())
-
-                # combine defaults w/ config data
-                combined = {**param_defaults, **config_data}
-
-                # update cli params that are non-default
-                keys = [d[0] for d in diffs]
-                for k in set(keys):
-                    combined[k] = ctx.params[k]
-
-                ctx.params = combined
-                
-                # add new parameters to the original config file
-                config_data = read_yaml(config_file)
-                
-                # remove flags from combined so the flag values in config.yaml won't get overwritten
-                flag_list = ['manual_set_depth_range', 'use_plane_bground', 'progress_bar', 'delete', 'compute_raw_scalars', 'skip_completed', 'skip_checks', 'get_cmd', 'run_cmd']
-                combined = {k:v for k, v in combined.items() if k not in flag_list}
-                # combine original config data and the combined params prioritizing the combined
-                config_data = {**config_data, **combined}
-                # with open(config_file, 'w') as f:
-                #     yaml.safe_dump(config_data, f)
-
-            return super().invoke(ctx)
-
-    return custom_command_class
-
-def set_bground_to_plane_fit(bground_im, plane, output_dir):
+def set_bground_to_plane_fit(bground_im, plane, output_dir: Path):
     """
     Replaces median-computed background image with plane fit.
     Only occurs if config_data['use_plane_bground'] == True.
@@ -115,7 +68,7 @@ def set_bground_to_plane_fit(bground_im, plane, output_dir):
     Args:
     bground_im (numpy.ndarray): Background image computed via median value in each pixel of depth video.
     plane (numpy.ndarray): Computed ROI Plane using RANSAC.
-    output_dir (str): Path to write updated background image to.
+    output_dir (Path): Path to write updated background image to.
 
     Returns:
     bground_im (numpy.ndarray): The background image.
@@ -127,7 +80,7 @@ def set_bground_to_plane_fit(bground_im, plane, output_dir):
     plane_im = (np.dot(coords.T, plane[:2]) + plane[3]) / -plane[2]
     plane_im = plane_im.reshape(bground_im.shape)
 
-    write_image(join(output_dir, 'bground.tiff'), plane_im, scale=True)
+    write_tiff(output_dir / 'bground.tiff', plane_im, scale=True)
 
     return plane_im
 
@@ -178,6 +131,7 @@ def gen_batch_sequence(nframes, chunk_size, overlap, offset=0):
     for i in range(0, len(seq) - overlap, chunk_size - overlap):
         out.append(seq[i:i + chunk_size])
     return out
+
 
 def load_timestamps(timestamp_file, col=0, alternate=False):
     """
@@ -256,7 +210,7 @@ def detect_avi_file(finfo):
 
     return detected
 
-def detect_and_set_camera_parameters(config_data, input_file=None):
+def detect_and_set_camera_parameters(config_data, input_file: Path | None = None):
     """
     Read the camera type and info and set the bg_roi_weights to the precomputed values.
     If camera_type is None, function will assume kinect is used.
@@ -291,14 +245,10 @@ def detect_and_set_camera_parameters(config_data, input_file=None):
         },
     }
 
-    if type(input_file) is tarfile.TarFile:
-        detected = 'kinect'
-    elif camera_type == 'auto' and input_file is not None:
-        if input_file.endswith('.dat'):
+    if camera_type == 'auto' and input_file is not None:
+        if input_file.suffix == ".dat":
             detected = 'kinect'
-        elif input_file.endswith('.mkv'):
-            detected = 'azure'
-        elif input_file.endswith('.avi'):
+        elif input_file.suffix == '.avi':
             if finfo is None:
                 finfo = get_movie_info(input_file,
                                        mapping=config_data.get('mapping', 0),
@@ -320,27 +270,6 @@ def detect_and_set_camera_parameters(config_data, input_file=None):
 
     return config_data
 
-def check_filter_sizes(config_data):
-    """
-    Ensure spatial and temporal filter kernel sizes are odd numbers.
-
-    Args:
-    config_data (dict): a dictionary holding all extraction parameters
-
-    Returns:
-    config_data (dict): Updated configuration dict
-
-    """
-
-    # Ensure filter kernel sizes are odd
-    if config_data['spatial_filter_size'][0] % 2 == 0 and config_data['spatial_filter_size'][0] > 0:
-        warnings.warn("Spatial Filter Size must be an odd number. Incrementing value by 1.")
-        config_data['spatial_filter_size'][0] += 1
-    if config_data['temporal_filter_size'][0] % 2 == 0 and config_data['temporal_filter_size'][0] > 0:
-        config_data['temporal_filter_size'][0] += 1
-        warnings.warn("Spatial Filter Size must be an odd number. Incrementing value by 1.")
-
-    return config_data
 
 def generate_missing_metadata(sess_dir, sess_name):
     """
@@ -358,52 +287,93 @@ def generate_missing_metadata(sess_dir, sess_name):
                    'NidaqChannels': 0, 'NidaqSamplingRate': 0.0, 'DepthResolution': [512, 424],
                    'ColorDataType': "Byte[]", "StartTime": ""}
 
-    with open(join(sess_dir, 'metadata.json'), 'w') as fp:
+    with open(Path(sess_dir) / 'metadata.json', 'w') as fp:
         json.dump(sample_meta, fp)
 
-def load_metadata(metadata_file):
+def load_metadata(metadata_file: Path | str):
     """
     Load metadata from session metadata.json file.
 
     Args:
-    metadata_file (str): path to metadata file
+    metadata_file (Path | str): path to metadata file
 
     Returns:
     metadata (dict): metadata dictionary of JSON contents
     """
 
-    try:
-        if not exists(metadata_file):
-            generate_missing_metadata(dirname(metadata_file), basename(dirname(metadata_file)))
-
+    metadata_file = Path(metadata_file)
+    if metadata_file.exists():
         with open(metadata_file, 'r') as f:
             metadata = json.load(f)
-    except TypeError:
-        # try loading directly
-        metadata = json.load(metadata_file)
+    else:
+        # generate sample metadata json for each session that is missing one
+
+        session_name = metadata_file.parent.name
+        metadata = {
+            "SubjectName": "",
+            f"SessionName": session_name,
+            "NidaqChannels": 0,
+            "NidaqSamplingRate": 0.0,
+            "DepthResolution": [512, 424],
+            "ColorDataType": "Byte[]",
+            "StartTime": "",
+        }
+
+        with open(metadata_file, 'w') as fp:
+            json.dump(metadata, fp)
 
     return metadata
 
-def load_found_session_paths(input_dir, exts):
+def load_found_session_paths(input_dir: str | Path, exts: list[str] | str) -> list[Path]:
     """
-    Find all depth files with the specified extension recursively in input directory.
+    Find all files with the specified extension recursively in input directory.
 
     Args:
-    input_dir (str): path to project base directory holding all the session sub-folders.
+    input_dir (str or Path): path to project base directory holding all the session sub-folders.
     exts (list or str): list of extensions to search for, or a single extension in string form.
 
     Returns:
-    files (list): sorted list of all paths to found depth files
+    files (list): sorted list of all paths to found files with provided extensions.
     """
+    input_dir = Path(input_dir).absolute()
 
     if not isinstance(exts, (tuple, list)):
         exts = [exts]
 
-    files = []
-    for ext in exts:
-        files.extend(glob(join(input_dir, '*/*' + ext), recursive=True))
+    return sorted(concat(input_dir.glob('**/*' + ext) for ext in exts))
 
-    return sorted(files)
+
+def make_gradient(width, height, h, k, a, b, theta=0):
+    """
+    Create gradient around bucket floor representing slanted wall values.
+
+    Args:
+    width (int): bounding box width
+    height (int) bounding box height
+    h (int): centroid x coordinate
+    k (int): centroid y coordinate
+    a (int): x-radius of drawn ellipse
+    b (int): y-radius of drawn ellipse
+    theta (float): degree to rotate ellipse in radians. (has no effect if drawing a circle)
+
+    Returns:
+    np.ndarray: numpy array with weighted values representing the proportion of values
+    to create a gradient from, highest closest to the circle wall.
+    """
+
+    # https://stackoverflow.com/questions/49829783/draw-a-gradual-change-ellipse-in-skimage/49848093#49848093
+    # Precalculate constants
+    st, ct = math.sin(theta), math.cos(theta)
+    aa, bb = a ** 2, b ** 2
+
+    # Generate (x,y) coordinate arrays
+    y, x = np.mgrid[-k:height - k, -h:width - h]
+
+    # Calculate the weight for each pixel
+    weights = (((x * ct + y * st) ** 2) / aa) + (((x * st - y * ct) ** 2) / bb)
+
+    return np.clip(0.98 - weights, 0, 0.81)
+
 
 def get_strels(config_data):
     """
@@ -425,6 +395,7 @@ def get_strels(config_data):
     }
 
     return str_els
+
 
 def select_strel(string='e', size=(10, 10)):
     """
@@ -483,72 +454,11 @@ def convert_pxs_to_mm(coords, resolution=(512, 424), field_of_view=(70.6, 60), t
 
 def scalar_attributes():
     """
-    Gets scalar attributes dict with names paired with descriptions.
-
-    Returns:
-    attributes (dict): a dictionary of metadata keys and descriptions.
+    Compatibility wrapper returning the module-level SCALAR_ATTRIBUTES dict.
+    Kept as a function because tests and downstream consumers import it.
     """
 
-    attributes = {
-        'centroid_x_px': 'X centroid (pixels)',
-        'centroid_y_px': 'Y centroid (pixels)',
-        'velocity_2d_px': '2D velocity (pixels / frame), note that missing frames are not accounted for',
-        'velocity_3d_px': '3D velocity (pixels / frame), note that missing frames are not accounted for, also height is in mm, not pixels for calculation',
-        'width_px': 'Mouse width (pixels)',
-        'length_px': 'Mouse length (pixels)',
-        'area_px': 'Mouse area (pixels)',
-        'centroid_x_mm': 'X centroid (mm)',
-        'centroid_y_mm': 'Y centroid (mm)',
-        'velocity_2d_mm': '2D velocity (mm / frame), note that missing frames are not accounted for',
-        'velocity_3d_mm': '3D velocity (mm / frame), note that missing frames are not accounted for',
-        'width_mm': 'Mouse width (mm)',
-        'length_mm': 'Mouse length (mm)',
-        'area_mm': 'Mouse area (mm)',
-        'height_ave_mm': 'Mouse average height (mm)',
-        'angle': 'Angle (radians, unwrapped)',
-        'velocity_theta': 'Angular component of velocity (arctan(vel_x, vel_y))'
-    }
-
-    return attributes
-
-
-def convert_raw_to_avi_function(input_file, chunk_size=2000, fps=30, delete=False, threads=3):
-    """
-    Compress depth file (.dat, '.mkv') to avi file.
-
-    Args:
-    input_file (str): path to depth file
-    chunk_size (int): size of chunks to process at a time
-    fps (int): frames per second
-    delete (bool): flag for deleting original depth file
-    threads (int): number of threads to write video.
-
-    """
-
-    new_file = f'{splitext(input_file)[0]}.avi'
-    print(f'Converting {input_file} to {new_file}')
-    # turn into os system call...
-    use_kwargs = {
-        'output-file': new_file,
-        'chunk-size': chunk_size,
-        'fps': fps,
-        'threads': threads
-    }
-    use_flags = {
-        'delete': delete
-    }
-    base_command = f'moseq2-extract convert-raw-to-avi {input_file}'
-    for k, v in use_kwargs.items():
-        base_command += f' --{k} {v}'
-    for k, v in use_flags.items():
-        if v:
-            base_command += f' --{k}'
-
-    print(base_command)
-    print()
-
-    os.system(base_command)
-
+    return SCALAR_ATTRIBUTES
 def strided_app(a, L, S):  # Window len = L, Stride len/stepsize = S
     """
     Create subarrays of an array with a given stride and window length.
@@ -615,71 +525,83 @@ def dict_to_h5(h5, dic, root='/', annotations=None):
                 h5[dest].attrs['description'] = annotations[key]
 
 
-def recursive_find_h5s(root_dir=os.getcwd(),
-                       ext='.h5',
-                       yaml_string='{}.yaml'):
+def _walk_and_filter(root_dir, filter_func):
     """
-    Recursively find h5 files, along with yaml files with the same basename
+    Helper to walk a directory recursively and apply a filter function to each file.
+
+    Args:
+        root_dir (str): The root directory to start walking from.
+        filter_func (callable): A function that takes a Path object and returns True
+                                if the file should be included, False otherwise.
+
+    Returns:
+        list[Path]: A list of absolute paths to the files that passed the filter.
+    """
+    matched_paths = []
+    root_path = Path(root_dir).absolute()
+    
+    for path in root_path.rglob('*'):
+        if path.is_file() and filter_func(path):
+            matched_paths.append(path)
+            
+    return matched_paths
+
+
+def recursive_find_h5s(root_dir=Path.cwd(),
+                       ext='.h5',
+                       yaml_suffix='.yaml'):
+    """
+    Recursively find h5 files, along with yaml files with the same basename,
+    that contain a 'frames' dataset.
 
     Args:
     root_dir (str): path to base directory to begin recursive search in.
     ext (str): extension to search for
-    yaml_string (str): string for filename formatting when saving data
+    yaml_suffix (str): string for filename formatting when finding related yaml files
 
     Returns:
-    h5s (list): list of found h5 files
-    dicts (list): list of found metadata files
-    yamls (list): list of found yaml files
+    h5s (list): list of found h5 files meeting criteria
+    dicts (list): list of corresponding loaded yaml file contents as dictionaries
+    yamls (list): list of corresponding found yaml file paths
     """
     if not ext.startswith('.'):
         ext = '.' + ext
 
-    def has_frames(f):
+    def has_frames(f_path: Path):
         try:
-            with h5py.File(f, 'r') as h5f:
+            with h5py.File(f_path, 'r') as h5f:
                 return 'frames' in h5f
         except OSError:
-            warnings.warn(f'Error reading {f}, skipping...')
+            warnings.warn(f'Error reading {f_path}, skipping...')
+            return False
+        except Exception as e:
+            warnings.warn(f'Unexpected error reading {f_path}: {e}, skipping...')
             return False
 
-    h5s = glob(join(abspath(root_dir), '**', f'*{ext}'), recursive=True)
-    h5s = filter(lambda f: exists(yaml_string.format(f.replace(ext, ''))), h5s)
-    h5s = list(filter(has_frames, h5s))
-    yamls = list(map(lambda f: yaml_string.format(f.replace(ext, '')), h5s))
-    dicts = list(map(read_yaml, yamls))
+    def _filter_h5(h5_path: Path):
+        if h5_path.suffix != ext:
+            return False
 
-    return h5s, dicts, yamls
+        yaml_file = h5_path.with_suffix(yaml_suffix)
+        return yaml_file.exists() and has_frames(h5_path)
 
+    # Use the helper function to find valid H5 files
+    h5s_final = _walk_and_filter(root_dir, _filter_h5)
 
-def escape_path(path):
-    """
-    Return a path to return to original base directory.
+    # Generate corresponding yamls and dicts, handling potential read errors
+    yamls = []
+    dicts = []
+    valid_h5s = []
+    for h5_file in h5s_final:
+        yaml_file = h5_file.with_suffix(yaml_suffix)
+        try:
+            dicts.append(read_yaml(yaml_file))
+            yamls.append(yaml_file)
+            valid_h5s.append(h5_file) # Keep h5 file only if yaml read succeeds
+        except Exception as e_read:
+            warnings.warn(f"Skipping H5 {h5_file} due to error reading YAML {yaml_file}: {e_read}")
 
-    Args:
-    path (str): path to current working dir
-
-    Returns:
-    path (str): path to original base_dir
-    """
-
-    return re.sub(r'\s', '\ ', path)
-
-
-def clean_file_str(file_str: str, replace_with: str = '-') -> str:
-    """
-    Removes invalid characters for a file name from a string.
-
-    Args:
-    file_str (str): filename substring to replace
-    replace_with (str): value to replace str with
-
-    Returns:
-    out (str): cleaned file string
-    """
-
-    out = re.sub(r'[ <>:"/\\|?*\']', replace_with, file_str)
-    # find any occurrences of `replace_with`, i.e. (--)
-    return re.sub(replace_with * 2, replace_with, out)
+    return valid_h5s, dicts, yamls
 
 
 def load_textdata(data_file, dtype=np.float32):
@@ -713,21 +635,6 @@ def load_textdata(data_file, dtype=np.float32):
     return data, timestamps
 
 
-def time_str_for_filename(time_str: str) -> str:
-    """
-    Process the timestamp to be used in the filename.
-
-    Args:
-    time_str (str): time str to format
-
-    Returns:
-    out (str): formatted timestamp str
-    """
-
-    out = time_str.split('.')[0]
-    out = out.replace(':', '-').replace('T', '_')
-    return out
-
 def build_path(keys: dict, format_string: str, snake_case=True) -> str:
     """
     Produce a new file name using keys collected from extraction h5 files.
@@ -742,13 +649,18 @@ def build_path(keys: dict, format_string: str, snake_case=True) -> str:
     """
 
     if 'start_time' in keys:
-        # process the time value
-        keys['start_time'] = time_str_for_filename(keys['start_time'])
+        # Parse the ISO‐8601 timestamp (with offset) and format for filenames
+        dt = datetime.fromisoformat(keys['start_time'])
+        keys['start_time'] = dt.strftime("%Y-%m-%d_%H-%M-%S")
 
     if snake_case:
         keys = valmap(camel_to_snake, keys)
 
-    return clean_file_str(format_string.format(**keys))
+    formatted = format_string.format(**keys)
+    # remove invalid characters for a file name
+    formatted = re.sub(r'[ <>:"/\\|?*\']', '-', formatted).replace('--', '-')
+    return formatted
+
 
 def read_yaml(yaml_file):
     """
@@ -760,9 +672,25 @@ def read_yaml(yaml_file):
     Returns:
     return_dict (dict): dict of yaml contents
     """
+    yaml = YAML(typ='safe', pure=True)
 
     with open(yaml_file, 'r') as f:
-        return yaml.safe_load(f)
+        return yaml.load(f)
+
+
+def write_yaml(yaml_file, data: dict):
+    """
+    Write a dictionary to a yaml file.
+
+    Args:
+    yaml_file (str): path to yaml file
+    data (dict): dict of data to write to yaml file
+    """
+
+    yaml = YAML(typ='safe', pure=True)
+    with open(yaml_file, 'w') as f:
+        yaml.dump(data, f)
+
 
 def mouse_threshold_filter(h5file, thresh=0):
     """
@@ -796,7 +724,17 @@ def _load_h5_to_dict(file: h5py.File, path) -> dict:
     ans = {}
     for key, item in file[path].items():
         if isinstance(item, h5py._hl.dataset.Dataset):
-            ans[key] = item[()]
+            val = item[()]
+            # h5py >= 3 returns bytes for variable-length strings; restore the
+            # str values that h5py 2.x (release environment) used to return.
+            if isinstance(val, bytes):
+                val = val.decode('utf-8')
+            elif isinstance(val, np.ndarray) and val.dtype == object:
+                val = np.array(
+                    [v.decode('utf-8') if isinstance(v, bytes) else v for v in val],
+                    dtype=object,
+                )
+            ans[key] = val
         elif isinstance(item, h5py._hl.group.Group):
             ans[key] = _load_h5_to_dict(file, '/'.join([path, key]))
     return ans
@@ -814,16 +752,16 @@ def h5_to_dict(h5file, path) -> dict:
     out (dict): a dict with h5 file contents with the same path structure
     """
 
-    if isinstance(h5file, str):
+    if isinstance(h5file, (str, Path)):
         with h5py.File(h5file, 'r') as f:
             out = _load_h5_to_dict(f, path)
     elif isinstance(h5file, h5py.File):
         out = _load_h5_to_dict(h5file, path)
     else:
-        raise Exception('file input not understood - need h5 file path or file object')
+        raise ValueError('file input not understood - need h5 file path or file object')
     return out
 
-def clean_dict(dct):
+def clean_dict(dct: dict) -> dict:
     """
     Standardize types of dict value.
 
@@ -840,76 +778,85 @@ def clean_dict(dct):
         elif isinstance(e, np.ndarray):
             out = e.tolist()
         elif isinstance(e, np.generic):
-            out = np.asscalar(e)
+            out = e.item()
         else:
             out = e
         return out
 
     return valmap(clean_entry, dct)
 
-_underscorer1: Pattern[str] = re.compile(r'(.)([A-Z][a-z]+)')
-_underscorer2 = re.compile('([a-z0-9])([A-Z])')
+_underscorer = re.compile(r'(?<!^)(?=[A-Z][a-z]+)')
 
-def camel_to_snake(s):
+def camel_to_snake(s: str) -> str:
     """
-    Convert CamelCase to snake_case
-
-    Args:
-    s (str): CamelCase string to convert to snake_case.
-
-    Returns:
-    (str): string in snake_case
+    Convert CamelCase to snake_case.
     """
+    return _underscorer.sub('_', s).lower()
 
-    subbed = _underscorer1.sub(r'\1_\2', s)
-    return _underscorer2.sub(r'\1_\2', subbed).lower()
-
-
-def recursive_find_unextracted_dirs(root_dir=os.getcwd(),
+def recursive_find_unextracted_dirs(root_dir: Path = Path.cwd(),
                                     session_pattern=r'session_\d+\.(?:tgz|tar\.gz)',
                                     extension='.dat',
                                     yaml_path='proc/results_00.yaml',
                                     metadata_path='metadata.json',
                                     skip_checks=False):
     """
-    Recursively find unextracted (or incompletely extracted) directories
+    Recursively find unextracted (or incompletely extracted) directories by checking
+    for source data files (.dat or archives) and the status of their expected outputs.
 
     Args:
-    root_dir (str): path to base directory to start recursive search for unextracted folders.
-    session_pattern (str): folder name pattern to search for
-    extension (str): file extension to search for
-    yaml_path (str): path to respective extracted metadata
-    metadata_path (str): path to relative metadata.json files
-    skip_checks (bool): indicates whether to check if the files exist at the given relative paths
+    root_dir (str): path to base directory to start recursive search.
+    session_pattern (str): regex pattern for session archive filenames.
+    extension (str): file extension for raw data files.
+    yaml_path (str): relative path from session dir to the completion status yaml file.
+    metadata_path (str): relative path from session dir (or root for archives) to the metadata json file.
+    skip_checks (bool): if True, skip checking completion status and metadata existence.
 
     Returns:
-    proc_dirs (1d-list): list of paths to each unextracted session's proc/ directory
+    proc_dirs (list[str]): list of absolute paths to source data files/archives that need processing.
     """
-
     from moseq2_extract.helpers.data import check_completion_status
 
-    session_archive_pattern = re.compile(session_pattern)
+    session_archive_re = re.compile(session_pattern)
 
-    proc_dirs = []
-    for root, _, files in os.walk(root_dir):
-        for file in files:
-            if file.endswith(extension) and not file.startswith("ir"):  # test for uncompressed session
-                status_file = join(root, yaml_path)
-                metadata_file = join(root, metadata_path)
-            elif session_archive_pattern.fullmatch(file):  # test for compressed session
-                session_name = basename(file).replace('.tar.gz', '').replace('.tgz', '')
-                status_file = join(root, session_name, yaml_path)
-                metadata_file = join(root, '{}.json'.format(session_name))
-            else:
-                continue  # skip this current file as it does not look like session data
+    def _filter_unextracted(file_path: Path):
+        status_file = None
+        metadata_file = None
+        is_candidate = False
 
-            # perform checks, append depth file to list if extraction is missing or incomplete
-            if skip_checks or (not check_completion_status(status_file) and exists(metadata_file)):
-                proc_dirs.append(join(root, file))
+        # Check for uncompressed session data
+        if file_path.suffix == extension and not file_path.name.startswith("ir"):
+            status_file = file_path.parent / yaml_path
+            metadata_file = file_path.with_name(metadata_path)
+            is_candidate = True
+        # Check for compressed session archive
+        elif session_archive_re.fullmatch(file_path.name):
+
+            session_name = file_path.with_suffix('')
+            # Status YAML is expected inside the extracted folder structure
+            status_file = session_name / yaml_path
+            # Metadata JSON is expected alongside the archive, named after the session
+            metadata_file = session_name.with_suffix(".json")
+            is_candidate = True
+
+        if not is_candidate: return False # Not a file type we are looking for
+
+        # If skipping checks, any candidate needs processing
+        if skip_checks: return True
+
+        # Check if status indicates incomplete and metadata exists
+        try:
+            is_complete = check_completion_status(status_file)
+            return not is_complete and metadata_file.exists()
+        except Exception as e:
+            warnings.warn(f"Error checking status for {file_path}: {e}. Skipping.")
+            return False
+
+    # Use the helper function to find paths needing processing
+    proc_dirs = _walk_and_filter(root_dir, _filter_unextracted)
 
     return proc_dirs
 
-def click_param_annot(click_cmd):
+def click_param_annot(click_cmd: click.Command) -> dict[str, str]:
     """
     Return a dict that maps option names to help strings from a click.Command instance.
 
@@ -952,100 +899,3 @@ def get_bucket_center(img, true_depth, threshold=650):
     cY = int(M["m01"] / M["m00"])
 
     return cX, cY
-
-def make_gradient(width, height, h, k, a, b, theta=0):
-    """
-    Create gradient around bucket floor representing slanted wall values.
-
-    Args:
-    width (int): bounding box width
-    height (int) bounding box height
-    h (int): centroid x coordinate
-    k (int): centroid y coordinate
-    a (int): x-radius of drawn ellipse
-    b (int): y-radius of drawn ellipse
-    theta (float): degree to rotate ellipse in radians. (has no effect if drawing a circle)
-
-    Returns:
-    np.ndarray: numpy array with weighted values from 0.08 -> 0.8 representing the proportion of values
-    to create a gradient from. 0.8 being the proportioned values closest to the circle wall.
-    """
-
-    # https://stackoverflow.com/questions/49829783/draw-a-gradual-change-ellipse-in-skimage/49848093#49848093
-    # Precalculate constants
-    st, ct = math.sin(theta), math.cos(theta)
-    aa, bb = a ** 2, b ** 2
-
-    # Generate (x,y) coordinate arrays
-    y, x = np.mgrid[-k:height - k, -h:width - h]
-
-    # Calculate the weight for each pixel
-    weights = (((x * ct + y * st) ** 2) / aa) + (((x * st - y * ct) ** 2) / bb)
-
-    return np.clip(0.98 - weights, 0, 0.81)
-
-
-def graduate_dilated_wall_area(bground_im, config_data, strel_dilate, output_dir):
-    """
-    Creates a gradient to represent the dilated (now visible) bucket wall regions.
-    Only is used if background is dilated to capture larger rodents in convex shaped buckets (\_/).
-    
-    Args:
-    bground_im (np.ndarray): the computed background image.
-    config_data (dict): dictionary containing helper user configuration parameters.
-    strel_dilate (cv2.structuringElement): dilation structuring element used to dilate background image.
-    output_dir (str): path to save newly computed background to use.
-
-    Returns:
-    bground_im (np.ndarray): the new background image with a gradient around the floor from high to low depth values.
-    """
-
-    # store old and new backgrounds
-    old_bg = deepcopy(bground_im)
-
-    # dilate background size to match ROI size and attribute wall noise to cancel out
-    bground_im = cv2.dilate(old_bg, strel_dilate, iterations=config_data.get('dilate_iterations', 5))
-
-    # determine center of bground roi
-    width, height = bground_im.shape[1], bground_im.shape[0]  # shape of bounding box
-
-    # getting helper user parameters
-    true_depth = config_data['true_depth']
-    xoffset = config_data.get('x_bg_offset', -2)
-    yoffset = config_data.get('y_bg_offset', 2)
-    widen_radius = config_data.get('widen_radius', 0)
-    bg_threshold = config_data.get('bg_threshold', np.median(bground_im))
-
-    # getting bground centroid
-    cx, cy = get_bucket_center(deepcopy(old_bg), true_depth, threshold=bg_threshold)
-
-    # set up gradient
-    h, k = cx + xoffset, cy + yoffset   # centroid of gradient circle
-    a, b = cx + widen_radius + 67, cy + widen_radius + 67 # x,y radii of gradient circle
-    theta = math.pi/24 # gradient angle; arbitrary - used to rotate ellipses.
-
-    # create slant gradient
-    bground_im = np.uint16((make_gradient(width, height, h, k, a, b, theta)) * 255)
-
-    # scale it back to depth
-    bground_im = np.uint16((bground_im/bground_im.max())*true_depth)
-
-    # overlay with actual bucket floor distance
-    if config_data.get('floor_slant', False):
-        ret, thresh = cv2.threshold(old_bg, np.median(old_bg), true_depth, 0)
-        contours, _ = cv2.findContours(thresh.copy().astype(np.uint8), cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
-        mask = np.zeros(bground_im.shape, np.uint8)
-
-        cv2.drawContours(mask, contours, -1, (255), -1)
-
-        tmp = np.where(mask == True, bground_im, old_bg)
-        bground_im = np.where(tmp == 0, bground_im, tmp)
-    else:
-        mask = np.ma.equal(old_bg, old_bg.max())
-        bground_im = np.where(mask == True, old_bg, bground_im)
-
-    bground_im = cv2.GaussianBlur(bground_im, (7, 7), 7)
-
-    write_image(join(output_dir, 'new_bg.tiff'), bground_im, scale=True)
-
-    return bground_im

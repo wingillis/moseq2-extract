@@ -2,25 +2,28 @@
 Wrapper functions for data processing in extraction.
 """
 
-import os
 import sys
+import math
 import uuid
 import h5py
 import shutil
+import joblib
+
+from moseq2_extract.helpers.compat import load_flip_classifier
 import warnings
-from glob import glob
 import numpy as np
 import urllib.request
+from math import ceil
+from pathlib import Path
 from copy import deepcopy
-import ruamel.yaml as yaml
 from tqdm.auto import tqdm
-from cytoolz import partial
-from moseq2_extract.io.image import write_image
+from cytoolz import partial, keyfilter, dissoc
+from moseq2_extract.io.image import write_tiff
 from moseq2_extract.helpers.extract import process_extract_batches
 from moseq2_extract.extract.proc import get_roi, get_bground_im_file
-from os.path import join, exists, dirname, basename, abspath, splitext
-from moseq2_extract.io.video import load_movie_data, get_movie_info, write_frames
-from moseq2_extract.util import mouse_threshold_filter, filter_warnings, read_yaml
+from moseq2_extract.io.video import get_movie_info, encode_depth_to_avi, batched_video_reader, encode_depth_to_avi_batch
+from moseq2_extract.helpers.parameters import MouseProcessing, ArenaParams, EMTrackingModel
+from moseq2_extract.util import mouse_threshold_filter, filter_warnings, read_yaml, write_yaml
 from moseq2_extract.helpers.data import (
     handle_extract_metadata,
     create_extract_h5,
@@ -31,20 +34,14 @@ from moseq2_extract.helpers.data import (
     check_completion_status,
 )
 from moseq2_extract.util import (
-    select_strel,
-    gen_batch_sequence,
-    scalar_attributes,
-    convert_raw_to_avi_function,
     set_bground_to_plane_fit,
     recursive_find_h5s,
     clean_dict,
-    graduate_dilated_wall_area,
     get_bucket_center,
     h5_to_dict,
     detect_and_set_camera_parameters,
     get_frame_range_indices,
-    check_filter_sizes,
-    get_strels,
+    SCALAR_ATTRIBUTES,
 )
 
 
@@ -73,9 +70,8 @@ def copy_h5_metadata_to_yaml_wrapper(input_dir, h5_metadata_path):
             tmp = clean_dict(h5_to_dict(f, h5_metadata_path))
             tup[0]["metadata"] = dict(tmp)
 
-        new_file = f"{basename(tup[1])}_update.yaml"
-        with open(new_file, "w+") as f:
-            yaml.safe_dump(tup[0], f)
+        new_file = f"{Path(tup[1]).stem}_update.yaml"
+        write_yaml(new_file, tup[0])
 
         if new_file != tup[1]:
             shutil.move(new_file, tup[1])
@@ -99,7 +95,8 @@ def generate_index_wrapper(input_dir, output_file):
     h5s, dicts, yamls = recursive_find_h5s(input_dir)
 
     file_with_uuids = [
-        (abspath(h5), abspath(yml), meta) for h5, yml, meta in zip(h5s, yamls, dicts)
+        (str(Path(h5).resolve()), str(Path(yml).resolve()), meta)
+        for h5, yml, meta in zip(h5s, yamls, dicts)
     ]
 
     # Ensuring all retrieved extracted session h5s have the appropriate metadata
@@ -120,8 +117,7 @@ def generate_index_wrapper(input_dir, output_file):
     output_dict = build_index_dict(file_with_uuids)
 
     # write out index yaml
-    with open(output_file, "w") as f:
-        yaml.safe_dump(output_dict, f)
+    write_yaml(output_file, output_dict)
 
     return output_file
 
@@ -141,11 +137,18 @@ def aggregate_extract_results_wrapper(
     Returns:
     indexpath (str): path to generated index file including all aggregated session information.
     """
+    input_dir = Path(input_dir)
+    output_dir = Path(output_dir)
 
     h5s, dicts, _ = recursive_find_h5s(input_dir)
 
-    not_in_output = lambda f: not exists(join(output_dir, basename(f)))
-    complete = lambda d: d["complete"] and not d["skip"]
+    def not_in_output(f: Path):
+        """check if the file is already in the output directory"""
+        return not (output_dir / f.name).exists()
+
+    def complete(d: dict):
+        """check if the extraction was complete and skip flag not set"""
+        return d["complete"] and not d["skip"]
 
     # only include real extracted mice with this filter func
     mtf = partial(mouse_threshold_filter, thresh=mouse_threshold)
@@ -172,7 +175,7 @@ def aggregate_extract_results_wrapper(
 
     print("Results successfully aggregated in", output_dir)
 
-    indexpath = generate_index_wrapper(output_dir, join(input_dir, "moseq2-index.yaml"))
+    indexpath = generate_index_wrapper(output_dir, Path(input_dir, "moseq2-index.yaml"))
 
     print(f"Index file path: {indexpath}")
     return indexpath
@@ -185,39 +188,30 @@ def generate_index_from_agg_res_wrapper(input_dir):
     Args:
     input_dir (str): path to aggregated results folder
     """
+    input_dir = Path(input_dir)
 
-    # find the yaml files
-    yaml_paths = glob(os.path.join(input_dir, "*.yaml"))
     # setup pca path
-    pca_path = os.path.join(os.path.dirname(input_dir), "_pca", "pca_scores.h5")
-    if os.path.exists(pca_path):
-        # point pca_path to pca scores you have
-        index_data = {
-            "files": [],
-            "pca_path": pca_path,
-        }
-    else:
-        index_data = {
-            "files": [],
-            "pca_path": "",
-        }
+    pca_path = input_dir.parent / "_pca" / "pca_scores.h5"
+    index_data = {
+        "files": [],
+        "pca_path": "",
+    }
+    if pca_path.exists():
+        # point pca_path to existing pca scores
+        index_data["pca_path"] = str(pca_path)
 
-    for p in yaml_paths:
+    for p in input_dir.rglob("*.yaml"):
         temp_yaml = read_yaml(p)
         file_dict = {
             "group": "default",
             "metadata": temp_yaml["metadata"],
-            "path": [p[:-4] + "h5", p],
+            "path": [str(p.with_suffix(".h5")), str(p)],
             "uuid": temp_yaml["uuid"],
         }
         index_data["files"].append(file_dict)
 
-    # find output filename
-    output_file = os.path.join(os.path.dirname(input_dir), "moseq2-index.yaml")
-
     # write out index yaml
-    with open(output_file, "w") as f:
-        yaml.safe_dump(index_data, f)
+    write_yaml(input_dir.parent / "moseq2-index.yaml", index_data)
 
 
 def get_roi_wrapper(input_file, config_data, output_dir=None):
@@ -234,15 +228,23 @@ def get_roi_wrapper(input_file, config_data, output_dir=None):
     bground_im (numpy.ndarray): Background image to plot in GUI
     first_frame (numpy.ndarray): First frame image to plot in GUI
     """
+    input_file = Path(input_file)
+
+    # create ArenaParams object
+    filtered_params = keyfilter(
+        lambda k: k in ArenaParams.__dataclass_fields__, config_data
+    )
+    arena_params = ArenaParams(**filtered_params)
+    config_data = dissoc(config_data, *filtered_params.keys())
 
     if output_dir is None:
-        output_dir = join(dirname(input_file), "proc")
-    elif exists(output_dir):
-        pass
-    elif dirname(output_dir) == "" or dirname(output_dir) not in input_file:
-        output_dir = join(dirname(input_file), output_dir)
+        output_dir = input_file.parent / "proc"
+    elif len(Path(output_dir).parts) == 1 or str(Path(output_dir).parent) not in str(input_file):
+        output_dir = Path(input_file).parent / output_dir
+    else:
+        output_dir = Path(output_dir)
 
-    os.makedirs(output_dir, exist_ok=True)
+    output_dir.mkdir(parents=True, exist_ok=True)
     config_data["output_dir"] = output_dir
 
     if config_data.get("finfo") is None:
@@ -253,8 +255,7 @@ def get_roi_wrapper(input_file, config_data, output_dir=None):
     config_data = detect_and_set_camera_parameters(config_data, input_file)
 
     print("Getting background...")
-    bground_im = get_bground_im_file(input_file, **config_data)
-    write_image(join(output_dir, "bground.tiff"), bground_im, scale=True)
+    bground_im, first_frame = get_bground_im_file(input_file, bg_v2=arena_params.bg_v2, **config_data)
 
     # readjust depth range
     if not config_data.get("manual_set_depth_range", False):
@@ -271,59 +272,98 @@ def get_roi_wrapper(input_file, config_data, output_dir=None):
         cX, cY = get_bucket_center(
             bground_im, bground_im.max(), threshold=int(np.median(bground_im) / 2)
         )
-        adjusted_bg_depth_range = bground_im[cY][cX]
-        config_data["bg_roi_depth_range"] = [
-            int(adjusted_bg_depth_range - 50),
-            int(adjusted_bg_depth_range + 50),
-        ]
-
-    # pass in config_data['finfo']['dims'] for frame size otherwise frame size is hard coded to 512x424
-    first_frame = load_movie_data(
-        input_file, 0, frame_size=config_data["finfo"]["dims"], **config_data
-    )  # there is a tar object flag that must be set!!
-    write_image(
-        join(output_dir, "first_frame.tiff"),
-        first_frame,
-        scale=True,
-        scale_factor=config_data["bg_roi_depth_range"],
-    )
+        adjusted_bg_depth_range = int(bground_im[cY][cX])
+        arena_params.bg_roi_depth_range = (
+            adjusted_bg_depth_range - 50, adjusted_bg_depth_range + 50
+        )
 
     print("Getting roi...")
-    strel_dilate = select_strel(
-        config_data["bg_roi_shape"], tuple(config_data["bg_roi_dilate"])
-    )
-    strel_erode = select_strel(
-        config_data["bg_roi_shape"], tuple(config_data["bg_roi_erode"])
-    )
 
     rois, plane = get_roi(
         bground_im,
         **config_data,
-        strel_dilate=strel_dilate,
-        strel_erode=strel_erode,
-        get_all_data=False,
+        return_all_data=False,
+        arena_params=arena_params,
     )
 
-    if config_data["use_plane_bground"]:
+    if arena_params.use_plane_bground:
         print("Using plane fit for background...")
         bground_im = set_bground_to_plane_fit(bground_im, plane, output_dir)
 
-    # Sort ROIs by largest mean area to select largest one (bg_roi_index)
-    rois = [rois[i] for i in np.argsort([np.sum(roi) for roi in rois])[::-1]]
+    # Sort arena masks by largest area (release behavior c6a7f08; default on)
+    if arena_params.bg_roi_sort_by_area:
+        rois = sorted(rois, key=lambda x: np.sum(x), reverse=True)
 
-    if type(config_data["bg_roi_index"]) == int:
-        config_data["bg_roi_index"] = [config_data["bg_roi_index"]]
+    if arena_params.bg_roi_index > len(rois):
+        warnings.warn(
+            f"bg_roi_index {arena_params.bg_roi_index} is greater than number of ROIs {len(rois)}. "
+            "Setting bg_roi_index to 0."
+        )
+        arena_params.bg_roi_index = 0
 
-    bg_roi_index = [
-        idx for idx in config_data["bg_roi_index"] if idx in range(len(rois))
-    ]
-    roi = rois[bg_roi_index[0]]
+    roi = rois[arena_params.bg_roi_index]
 
-    for idx in bg_roi_index:
-        roi_filename = f"roi_{idx:02d}.tiff"
-        write_image(join(output_dir, roi_filename), rois[idx], scale=True)
+    roi_filename = f"roi_{arena_params.bg_roi_index:02d}.tiff"
+    write_tiff(output_dir / roi_filename, roi, scale=True)
 
     return roi, bground_im, first_frame
+
+
+def validate_flip_classifier(config_data):
+    """
+    Validate that the flip classifier is compatible with the configured crop size.
+
+    Raises ValueError early if the flip classifier expects a different number of
+    input features than the crop size would produce, rather than failing silently
+    during extraction.
+
+    Args:
+    config_data (dict): extraction configuration containing 'flip_classifier' and 'crop_size'
+    """
+    flip_classifier = config_data.get("flip_classifier")
+    if not flip_classifier:
+        return
+
+    if not Path(flip_classifier).exists():
+        return
+
+    crop_size = config_data.get("crop_size", (80, 80))
+
+    try:
+        clf = load_flip_classifier(flip_classifier)
+    except Exception:
+        return
+
+    n_features = getattr(clf, "n_features_", None)
+    if n_features is None:
+        return
+
+    actual_features = crop_size[0] * crop_size[1]
+    if actual_features == n_features:
+        return
+
+    expected_crop = int(math.sqrt(n_features))
+    raise ValueError(
+        f"\nFlip classifier / crop size mismatch!\n\n"
+        f"  Your crop_size is {tuple(crop_size)} ({actual_features} pixels per frame),\n"
+        f"  but the flip classifier at\n"
+        f"    '{flip_classifier}'\n"
+        f"  expects {n_features} pixels (i.e. crop_size ({expected_crop}, {expected_crop})).\n\n"
+        f"  This typically happens when the flip classifier and camera type don't match.\n"
+        f"  The pre-trained flip classifiers are camera-specific:\n"
+        f"    - Kinect v2 (K2) classifiers expect crop_size (80, 80)\n"
+        f"    - Azure / Orbbec classifiers expect crop_size (120, 120)\n"
+        f"  If you generated your config with one camera type but downloaded\n"
+        f"  the flip classifier for a different camera, they won't be compatible.\n\n"
+        f"  To fix this, either:\n"
+        f"  1. Change crop_size in your config.yaml to ({expected_crop}, {expected_crop})\n"
+        f"     to match your current flip classifier.\n"
+        f"  2. Download a flip classifier that matches your current crop_size by\n"
+        f"     re-running the download step with the correct selection:\n"
+        f"       CLI:      moseq2-extract download-flip-file config.yaml\n"
+        f"       Notebook: change the 'selection' parameter in the download cell\n"
+        f"                 (selection=1 for K2, selection=3 for Azure/Orbbec)"
+    )
 
 
 def extract_wrapper(input_file, output_dir, config_data, num_frames=None, skip=False):
@@ -336,46 +376,84 @@ def extract_wrapper(input_file, output_dir, config_data, num_frames=None, skip=F
     config_data (dict): dictionary containing extraction parameters.
     num_frames (int): number of frames to extract.
     skip (bool): indicates whether to skip file if already extracted
-    extract (function): extraction function state
 
     Returns:
     output_dir (str): path to directory containing extraction
     """
     print("Processing:", input_file)
+
+    validate_flip_classifier(config_data)
+
     # get the basic metadata
+    input_file = Path(input_file)
+    output_dir = Path(output_dir)
+
+    # filter for mouse processing parameters
+    filtered_params = keyfilter(
+        lambda k: k in MouseProcessing.__dataclass_fields__, config_data
+    )
+    mouse_proc_params = MouseProcessing(**filtered_params)
+    config_data = dissoc(config_data, *filtered_params.keys())
+
+    # filter for EM tracking parameters
+    filtered_params = keyfilter(
+        lambda k: k in EMTrackingModel.__dataclass_fields__, config_data
+    )
+    em_tracking_params = EMTrackingModel(**filtered_params)
+    config_data = dissoc(config_data, *filtered_params.keys())
 
     # ensure 'get_cmd' and 'run_cmd' are not in config_data or get_bground_im_file will fail
-    config_data = {
-        k: v
-        for k, v in config_data.items()
-        if k not in ("get_cmd", "run_cmd", "extensions")
-    }
+    config_data = dissoc(config_data, "get_cmd", "run_cmd", "extensions")
+
+    # Re-merge the dataclass-filtered parameters into the serialized parameter
+    # record so h5/yaml outputs keep the full release-era parameter set
+    # (downstream tools read these from results_00.h5).
+    def _serializable_fields(params_obj):
+        out = {}
+        for fname, fobj in type(params_obj).__dataclass_fields__.items():
+            if fobj.init:
+                out[fname] = getattr(params_obj, fname)
+        return out
 
     status_dict = {
         "complete": False,
         "skip": False,
         "uuid": str(uuid.uuid4()),
         "metadata": "",
-        "parameters": deepcopy(config_data),
+        "parameters": {
+            **deepcopy(config_data),
+            **_serializable_fields(mouse_proc_params),
+            **_serializable_fields(em_tracking_params),
+        },
     }
 
-    # save input directory path
-    in_dirname = dirname(input_file)
-
-    # If input file is compressed (tarFile), returns decompressed file path and tar bool indicator.
-    # Also gets loads respective metadata dictionary and timestamp array.
-    acquisition_metadata, config_data["timestamps"], config_data["tar"] = (
-        handle_extract_metadata(input_file, in_dirname)
+    # loads metadata dictionary and timestamp array.
+    acquisition_metadata, config_data["timestamps"] = (
+        handle_extract_metadata(input_file)
     )
-
-    # updating input_file reference to open tar file object if input file ends with [.tar/.tar.gz]
-    if config_data["tar"] is not None:
-        input_file = config_data["tar"]
 
     config_data["finfo"] = get_movie_info(input_file, **config_data)
 
-    if config_data["finfo"]["nframes"] is None:
-        config_data["finfo"]["nframes"] = len(config_data["timestamps"])
+    nframes_from_video = config_data["finfo"]["nframes"]
+    n_timestamps = len(config_data["timestamps"]) if config_data["timestamps"] is not None else 0
+
+    if nframes_from_video is None:
+        warnings.warn(
+            f"Could not determine frame count from the depth video in "
+            f"'{in_dirname}'. This can happen if the video format is "
+            f"unrecognized or the file is empty. Falling back to "
+            f"depth_ts.txt timestamp count ({n_timestamps}). Cannot verify "
+            f"that the depth video and depth_ts.txt have the same length — "
+            f"please check manually."
+        )
+        config_data["finfo"]["nframes"] = n_timestamps
+    elif n_timestamps > 0 and nframes_from_video != n_timestamps:
+        raise ValueError(
+            f"Frame count mismatch in '{in_dirname}': "
+            f"the depth video has {nframes_from_video} frames but "
+            f"depth_ts.txt has {n_timestamps} timestamps. "
+            f"This session's data appears to be corrupt or incomplete."
+        )
 
     status_dict["metadata"] = acquisition_metadata  # update status dict
 
@@ -390,53 +468,37 @@ def extract_wrapper(input_file, output_dir, config_data, num_frames=None, skip=F
     elif isinstance(num_frames, int):
         nframes = num_frames
 
-    config_data = check_filter_sizes(config_data)
-
     # Compute total number of frames to include from an initial starting point.
     total_frames, first_frame_idx, last_frame_idx = get_frame_range_indices(
         *config_data["frame_trim"], nframes
     )
 
-    scalars_attrs = scalar_attributes()
-    scalars = list(scalars_attrs)
-
-    # Get frame chunks to extract
-    frame_batches = gen_batch_sequence(
-        last_frame_idx,
-        config_data["chunk_size"],
-        config_data["chunk_overlap"],
-        offset=first_frame_idx,
-    )
+    scalars = list(SCALAR_ATTRIBUTES)
 
     # set up the output directory
     if output_dir is None:
-        output_dir = join(in_dirname, "proc")
-    else:
-        if in_dirname not in output_dir:
-            output_dir = join(in_dirname, output_dir)
+        output_dir = input_file.parent / "proc"
+    elif len(output_dir.parts) < 2 and output_dir.parts[0] != "/":
+        output_dir = input_file.parent / output_dir
 
-    if not exists(output_dir):
-        os.makedirs(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
 
     # Ensure index is int
     if isinstance(config_data["bg_roi_index"], list):
         config_data["bg_roi_index"] = config_data["bg_roi_index"][0]
 
     output_filename = f'results_{config_data["bg_roi_index"]:02d}'
-    status_filename = join(output_dir, f"{output_filename}.yaml")
-    movie_filename = join(output_dir, f"{output_filename}.mp4")
-    results_filename = join(output_dir, f"{output_filename}.h5")
+
+    results_filename = output_dir / f"{output_filename}.h5"
+    movie_filename = results_filename.with_suffix(".mp4")
+    status_filename = results_filename.with_suffix(".yaml")
 
     # Check if session has already been extracted
     if check_completion_status(status_filename) and skip:
         print("Skipping...")
         return
 
-    with open(status_filename, "w") as f:
-        yaml.safe_dump(status_dict, f)
-
-    # Get Structuring Elements for extraction
-    str_els = get_strels(config_data)
+    write_yaml(status_filename, status_dict)
 
     # Compute ROIs
     roi, bground_im, first_frame = get_roi_wrapper(
@@ -451,14 +513,6 @@ def extract_wrapper(input_file, output_dir, config_data, num_frames=None, skip=F
 
     print("Detected true depth:", config_data["true_depth"])
 
-    if config_data.get("dilate_iterations", 0) > 1 and config_data.get(
-        "graduate_walls"
-    ):
-        print("Dilating background and graduating walls")
-        bground_im = graduate_dilated_wall_area(
-            bground_im, config_data, str_els["strel_dilate"], output_dir
-        )
-
     extraction_data = {
         "bground_im": bground_im,
         "roi": roi,
@@ -466,7 +520,6 @@ def extract_wrapper(input_file, output_dir, config_data, num_frames=None, skip=F
         "first_frame_idx": first_frame_idx,
         "last_frame_idx": last_frame_idx,
         "nframes": total_frames,
-        "frame_batches": frame_batches,
     }
 
     # farm out the batches and write to an hdf5 file
@@ -478,7 +531,8 @@ def extract_wrapper(input_file, output_dir, config_data, num_frames=None, skip=F
             acquisition_metadata=acquisition_metadata,
             config_data=config_data,
             status_dict=status_dict,
-            scalars_attrs=scalars_attrs,
+            scalars_attrs=SCALAR_ATTRIBUTES,
+            mouse_proc_params=mouse_proc_params,
         )
 
         # Write crop-rotated results to h5 file and write video preview mp4 file
@@ -488,33 +542,33 @@ def extract_wrapper(input_file, output_dir, config_data, num_frames=None, skip=F
             input_file=input_file,
             config_data=config_data,
             scalars=scalars,
-            str_els=str_els,
             output_mov_path=movie_filename,
+            mouse_proc_params=mouse_proc_params,
+            em_tracking_params=em_tracking_params,
         )
 
     print()
 
     # Compress the depth file to avi format; compresses original raw file by ~8x.
     try:
-        if config_data["tar"] is None:
-            if input_file.endswith("dat") and config_data["compress"]:
-                convert_raw_to_avi_function(
-                    input_file,
-                    chunk_size=config_data["compress_chunk_size"],
-                    fps=config_data["fps"],
-                    delete=False,  # to be changed when we're ready!
-                    threads=config_data["compress_threads"],
-                )
+        if input_file.suffix == ".dat" and config_data["compress"]:
+            convert_raw_to_avi_wrapper(
+                input_file,
+                output_file=input_file.with_suffix(".avi"),
+                chunk_size=config_data["chunk_size"],
+                fps=config_data["fps"],
+                delete=False,
+            )
     except AttributeError as e:
         print("Error converting raw video to avi format, continuing anyway...")
         print(e)
 
     status_dict["complete"] = True
     if status_dict["parameters"].get("true_depth") is None:
-        # config_data.get('true_depth') is numpy.float64 and yaml.safe_dump can't represent the object
+        # config_data.get('true_depth') is numpy.float64 and yaml.dump can't represent the object
         status_dict["parameters"]["true_depth"] = float(config_data.get("true_depth"))
-    with open(status_filename, "w") as f:
-        yaml.safe_dump(status_dict, f)
+
+    write_yaml(status_filename, status_dict)
 
     return output_dir
 
@@ -532,6 +586,7 @@ def flip_file_wrapper(config_file, output_dir, selected_flip=None):
     Returns:
     None
     """
+    output_dir = Path(output_dir)
 
     flip_files = {
         "large mice with fibers (K2)": "https://storage.googleapis.com/flip-classifiers/flip_classifier_k2_largemicewithfiber.pkl",
@@ -552,16 +607,14 @@ def flip_file_wrapper(config_file, output_dir, selected_flip=None):
     while selected_flip is None:
         try:
             selected_flip = key_list[int(input("Enter a selection "))]
-        except ValueError:
+        except (ValueError, IndexError):
             print("Please enter a valid number listed above")
-            continue
 
-    if not exists(output_dir):
-        os.makedirs(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
 
     selection = flip_files[selected_flip]
 
-    output_filename = join(output_dir, basename(selection))
+    output_filename = output_dir / Path(selection).name
 
     urllib.request.urlretrieve(selection, output_filename)
     print("Successfully downloaded flip file to", output_filename)
@@ -569,17 +622,16 @@ def flip_file_wrapper(config_file, output_dir, selected_flip=None):
     # Update the config file with the latest path to the flip classifier
     try:
         config_data = read_yaml(config_file)
-        config_data["flip_classifier"] = output_filename
+        config_data["flip_classifier"] = str(output_filename)
 
-        with open(config_file, "w") as f:
-            yaml.safe_dump(config_data, f)
+        write_yaml(config_file, config_data)
     except Exception as e:
         print("Could not update configuration file flip classifier path")
         print("Unexpected error:", e)
 
 
 def convert_raw_to_avi_wrapper(
-    input_file, output_file, chunk_size, fps, delete, threads, mapping
+    input_file, output_file, chunk_size, fps, delete
 ):
     """
     compress a raw depth file into an avi file (with depth values) that is 8x smaller.
@@ -590,55 +642,47 @@ def convert_raw_to_avi_wrapper(
     chunk_size (int): Size of frame chunks to iteratively process
     fps (int): frame rate.
     delete (bool): Delete the original depth file if True.
-    threads (int): Number of threads used to encode video.
-    mapping (str or int): Indicate which video stream to from the inputted file
-
-    Returns:
     """
+    input_file = Path(input_file)
 
     if output_file is None:
-        base_filename = splitext(basename(input_file))[0]
-        output_file = join(dirname(input_file), f"{base_filename}.avi")
+        output_file = input_file.with_suffix(".avi")
 
-    vid_info = get_movie_info(input_file, mapping=mapping)
-    frame_batches = gen_batch_sequence(vid_info["nframes"], chunk_size, 0)
-    video_pipe = None
+    vid_info = get_movie_info(input_file)
 
-    for batch in tqdm(frame_batches, desc="Encoding batches"):
-        frames = load_movie_data(input_file, batch, mapping=mapping)
-        video_pipe = write_frames(
-            output_file,
-            frames,
-            pipe=video_pipe,
-            close_pipe=False,
-            threads=threads,
-            fps=fps,
-        )
+    # Encode raw depth frames to avi file
+    with encode_depth_to_avi(
+        output_file, fps=fps, height=vid_info["dims"][1], width=vid_info["dims"][0]
+    ) as writer:
+        for indices, frames in tqdm(batched_video_reader(
+            input_file, n_frames=vid_info["nframes"], batch_size=chunk_size
+        ), total=ceil(vid_info["nframes"] / chunk_size), desc="Encoding raw depth frames to avi file"):
+            encode_depth_to_avi_batch(frames, writer)
 
-    if video_pipe:
-        video_pipe.communicate()
-
-    for batch in tqdm(frame_batches, desc="Checking data integrity"):
-        raw_frames = load_movie_data(input_file, batch, mapping=mapping)
-        encoded_frames = load_movie_data(output_file, batch, mapping=mapping)
-
+    # Test integrity of encoded video
+    for (raw_indices, raw_frames), (encoded_indices, encoded_frames) in tqdm(
+        zip(
+            batched_video_reader(input_file, n_frames=vid_info["nframes"], batch_size=chunk_size),
+            batched_video_reader(output_file, n_frames=vid_info["nframes"], batch_size=chunk_size),
+        ),
+        total=ceil(vid_info["nframes"] / chunk_size),
+        desc="Testing integrity of encoded video",
+    ):
         if not np.array_equal(raw_frames, encoded_frames):
-            raise RuntimeError(
-                f"Raw frames and encoded frames not equal from {batch[0]} to {batch[-1]}"
-            )
+            raise RuntimeError("Raw frames and encoded frames not equal")
 
     print("Encoding successful")
 
     if delete:
         print("Deleting", input_file)
-        os.remove(input_file)
+        input_file.unlink()
 
 
 def copy_slice_wrapper(
-    input_file, output_file, copy_slice, chunk_size, fps, delete, threads, mapping
+    input_file, output_file, copy_slice, chunk_size, fps, delete
 ):
     """
-    Copy a segment of an input depth recording into a new video file.
+    Copy a segment of an input depth recording into a new video file. Will always encode to avi format.
 
     Args:
     input_file (str): Path to depth file to read segment from
@@ -647,67 +691,49 @@ def copy_slice_wrapper(
     chunk_size (int): Size of frame chunks to iteratively process
     fps (int): Frames per second.
     delete (bool): Delete the original depth file if True.
-    threads (int): Number of threads used to encode video.
-    mapping (str or int): Indicate which video stream to from the inputted file
 
     Returns:
     """
+    input_file = Path(input_file)
 
     if output_file is None:
-        base_filename = splitext(basename(input_file))[0]
-        avi_encode = True
-        output_file = join(dirname(input_file), f"{base_filename}.avi")
+        output_file = input_file.with_suffix(".avi")
     else:
-        output_filename, ext = splitext(basename(output_file))
-        if ext == ".avi":
-            avi_encode = True
-        else:
-            avi_encode = False
+        output_file = Path(output_file)
+
 
     vid_info = get_movie_info(input_file)
-    copy_slice = (copy_slice[0], np.minimum(copy_slice[1], vid_info["nframes"]))
-    nframes = copy_slice[1] - copy_slice[0]
-    offset = copy_slice[0]
+    copy_slice = (copy_slice[0], min(copy_slice[1], vid_info["nframes"]))
 
-    frame_batches = gen_batch_sequence(nframes, chunk_size, 0, offset)
-    video_pipe = None
-
-    if exists(output_file):
+    if output_file.exists():
         overwrite = input(
             "Press ENTER to overwrite your previous extraction, else to end the process."
         )
         if overwrite != "":
             sys.exit(0)
 
-    for batch in tqdm(frame_batches, desc="Encoding batches"):
-        frames = load_movie_data(input_file, batch, mapping=mapping)
-        if avi_encode:
-            video_pipe = write_frames(
-                output_file,
-                frames,
-                pipe=video_pipe,
-                close_pipe=False,
-                threads=threads,
-                fps=fps,
-            )
-        else:
-            with open(output_file, "ab") as f:
-                f.write(frames.astype("uint16").tobytes())
+    with encode_depth_to_avi(
+        output_file, fps=fps, height=vid_info["dims"][1], width=vid_info["dims"][0]
+    ) as writer:
+        for (indices, frames) in batched_video_reader(
+            input_file,
+            n_frames=copy_slice[1],  # this is the end frame
+            batch_size=chunk_size,
+            offset=copy_slice[0],
+            frame_size=vid_info["dims"],
+        ):
+            encode_depth_to_avi_batch(frames, writer)
 
-    if avi_encode and video_pipe:
-        video_pipe.communicate()
-
-    for batch in tqdm(frame_batches, desc="Checking data integrity"):
-        raw_frames = load_movie_data(input_file, batch, mapping=mapping)
-        encoded_frames = load_movie_data(output_file, batch, mapping=mapping)
-
+    # Test integrity of encoded video
+    for (raw_indices, raw_frames), (encoded_indices, encoded_frames) in zip(
+        batched_video_reader(input_file, n_frames=copy_slice[1], batch_size=chunk_size, offset=copy_slice[0]),
+        batched_video_reader(output_file, n_frames=copy_slice[1] - copy_slice[0], batch_size=chunk_size),
+    ):
         if not np.array_equal(raw_frames, encoded_frames):
-            raise RuntimeError(
-                f"Raw frames and encoded frames not equal from {batch[0]} to {batch[-1]}"
-            )
+            raise RuntimeError("Raw frames and encoded frames not equal")
 
     print("Encoding successful")
 
     if delete:
         print("Deleting", input_file)
-        os.remove(input_file)
+        input_file.unlink()

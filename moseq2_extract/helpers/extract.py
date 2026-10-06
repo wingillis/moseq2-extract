@@ -2,19 +2,20 @@
 Extraction-helper utility functions.
 """
 
+import subprocess
 import numpy as np
-import ruamel.yaml as yaml
-from os.path import exists, basename, dirname, join, abspath
-from os import makedirs, system
+from math import ceil
+from pathlib import Path
 from tqdm.auto import tqdm
+from moseq2_extract.util import read_yaml, write_yaml
 from moseq2_extract.extract.extract import extract_chunk
-from moseq2_extract.util import read_yaml
-from moseq2_extract.io.video import load_movie_data, write_frames_preview
 from moseq2_extract.helpers.data import check_completion_status
+from moseq2_extract.helpers.parameters import MouseProcessing, EMTrackingModel
+from moseq2_extract.io.video import write_frames_preview, open_video_writer, batched_video_reader
 
 
 def write_extracted_chunk_to_h5(
-    h5_file, results, config_data, scalars, frame_range, offset
+    h5_file, results, scalars, frame_range, offset
 ):
     """
 
@@ -30,22 +31,25 @@ def write_extracted_chunk_to_h5(
 
     Returns:
     """
+    def _write_h5(name, data: np.ndarray):
+        """Write data after offset to h5 file."""
+        h5_file[name][frame_range] = data[offset:]
 
     # Writing computed scalars to h5 file
     for scalar in scalars:
-        h5_file[f"scalars/{scalar}"][frame_range] = results["scalars"][scalar][offset:]
+        _write_h5(f"scalars/{scalar}", results["scalars"][scalar])
 
     # Writing frames and mask to h5
-    h5_file["frames"][frame_range] = results["depth_frames"][offset:]
-    h5_file["frames_mask"][frame_range] = results["mask_frames"][offset:]
+    _write_h5("frames", results["depth_frames"])
+    _write_h5("frames_mask", results["mask_frames"])
 
     # Writing flip classifier results to h5
-    if config_data["flip_classifier"]:
-        h5_file["metadata/extraction/flips"][frame_range] = results["flips"][offset:]
+    if "flips" in results and results["flips"] is not None:
+        _write_h5("metadata/extraction/flips", results["flips"])
 
 
 def set_tracking_model_parameters(
-    results, min_height, tracking_model_ll_clip, chunk_overlap, **kwargs
+    results, min_height, ll_clip, chunk_overlap,
 ):
     """
     Threshold and clip the masked frame data if use_tracking_model = True and update results.
@@ -63,12 +67,11 @@ def set_tracking_model_parameters(
     """
 
     # Thresholding and clipping EM-tracked frame mask data
-    results["mask_frames"][
-        results["depth_frames"] < min_height
-    ] = tracking_model_ll_clip
-    results["mask_frames"][
-        results["mask_frames"] < tracking_model_ll_clip
-    ] = tracking_model_ll_clip
+    results["mask_frames"] = np.where(
+        np.logical_or(results["depth_frames"] < min_height, results["mask_frames"] < ll_clip),
+        ll_clip,
+        results["mask_frames"],
+    )
 
     # Updating EM tracking estimators
     tracking_init_mean = results["parameters"]["mean"][-(chunk_overlap + 1)]
@@ -77,13 +80,13 @@ def set_tracking_model_parameters(
     return results, tracking_init_mean, tracking_init_cov
 
 
-def make_output_movie(results, config_data, offset=0):
+def make_output_movie(results, crop_size: tuple[int, int], offset=0):
     """
     Create an array for output movie with filtered video and cropped mouse on the top left
 
     Args:
     results (dict): dict of extracted depth frames, and original raw chunk to create an output movie.
-    config_data (dict): dict of extraction parameters containing the crop sizes used in the extraction.
+    crop_size (tuple): size of the cropped mouse image to be added to the top left of the mouse video.
     offset (int): current offset being used, automatically set if chunk_overlap > 0
 
     Returns:
@@ -95,17 +98,17 @@ def make_output_movie(results, config_data, offset=0):
     output_movie = np.zeros(
         (
             nframes,
-            rows + config_data["crop_size"][0],
-            cols + config_data["crop_size"][1],
+            rows + crop_size[0],
+            cols + crop_size[1],
         ),
         "uint16",
     )
 
     # Populating array with filtered and cropped videos
-    output_movie[:, : config_data["crop_size"][0], : config_data["crop_size"][1]] = (
+    output_movie[:, :crop_size[0], :crop_size[1]] = (
         results["depth_frames"][offset:]
     )
-    output_movie[:, config_data["crop_size"][0] :, config_data["crop_size"][1] :] = (
+    output_movie[:, crop_size[0]:, crop_size[1]:] = (
         results["chunk"][offset:]
     )
 
@@ -117,12 +120,12 @@ def process_extract_batches(
     config_data,
     bground_im,
     roi,
-    frame_batches,
-    str_els,
     output_mov_path,
     scalars=None,
     h5_file=None,
     video_pipe=None,
+    mouse_proc_params: MouseProcessing = None,
+    em_tracking_params: EMTrackingModel = None,
     **kwargs,
 ):
     """
@@ -144,60 +147,72 @@ def process_extract_batches(
     Returns:
     """
 
-    tracking_init_mean = config_data.pop("tracking_init_mean", None)
-    tracking_init_cov = config_data.pop("tracking_init_cov", None)
-
-    for i, frame_range in enumerate(tqdm(frame_batches, desc="Processing batches")):
-        raw_chunk = load_movie_data(
-            input_file, frame_range, frame_size=bground_im.shape[::-1], **config_data
+    with open_video_writer(
+        output_mov_path,
+        config_data["fps"],
+        mouse_proc_params.min_height,
+        mouse_proc_params.max_height,
+    ) as preview_writer:
+        # Bound reading to the requested extraction window (num-frames /
+        # frame-trim), matching release gen_batch_sequence(last_frame_idx,
+        # chunk_size, overlap, offset=first_frame_idx) semantics. Without
+        # this, -n/--num-frames and --frame-trim are ignored and the whole
+        # recording is processed.
+        first_frame_idx = kwargs.get("first_frame_idx", 0)
+        last_frame_idx = kwargs.get(
+            "last_frame_idx", config_data["finfo"]["nframes"]
         )
+        for i, (frame_range, raw_chunk) in enumerate(tqdm(
+            batched_video_reader(
+                input_file,
+                batch_size=config_data["chunk_size"],
+                frame_size=bground_im.shape[::-1],
+                n_frames=last_frame_idx,
+                offset=first_frame_idx,
+                overlap=config_data["chunk_overlap"],
+                **config_data,
+            ),
+            desc="Loading batches",
+            total=ceil(
+                (last_frame_idx - first_frame_idx)
+                / (config_data["chunk_size"] - config_data["chunk_overlap"])
+            ),
+        )):
 
-        offset = config_data["chunk_overlap"] if i > 0 else 0
+            offset = config_data["chunk_overlap"] if i > 0 else 0
 
-        # Get crop-rotated frame batch
-        results = extract_chunk(
-            **config_data,
-            **str_els,
-            chunk=raw_chunk,
-            roi=roi,
-            bground=bground_im,
-            tracking_init_mean=tracking_init_mean,
-            tracking_init_cov=tracking_init_cov,
-        )
-
-        if config_data["use_tracking_model"]:
-            # threshold and clip mask frames from EM tracking results
-            results, tracking_init_mean, tracking_init_cov = (
-                set_tracking_model_parameters(results, **config_data)
+            # Get crop-rotated frame batch
+            results = extract_chunk(
+                **config_data,
+                chunk=raw_chunk,
+                roi=roi,
+                bground=bground_im,
+                mouse_proc_params=mouse_proc_params,
+                em_tracking_params=em_tracking_params,
             )
 
-        # Offsetting frame chunk by CLI parameter defined option: chunk_overlap
-        frame_range = frame_range[offset:]
+            if mouse_proc_params.use_tracking_model:
+                # threshold and clip mask frames from EM tracking results
+                results, mean, cov = set_tracking_model_parameters(
+                    results,
+                    ll_clip=em_tracking_params.tracking_model_ll_clip,
+                    chunk_overlap=config_data["chunk_overlap"],
+                )
+                em_tracking_params.tracking_model_init_mean = mean
+                em_tracking_params.tracking_model_init_cov = cov
 
-        if h5_file is not None:
-            write_extracted_chunk_to_h5(
-                h5_file, results, config_data, scalars, frame_range, offset
-            )
+            # Offsetting frame chunk by CLI parameter defined option: chunk_overlap
+            frame_range = frame_range[offset:]
 
-        # Create array for output movie with filtered video and cropped mouse on the top left
-        output_movie = make_output_movie(results, config_data, offset)
+            if h5_file is not None:
+                write_extracted_chunk_to_h5(
+                    h5_file, results, scalars, frame_range, offset
+                )
 
-        # Writing frame batch to mp4 file
-        video_pipe = write_frames_preview(
-            output_mov_path,
-            output_movie,
-            pipe=video_pipe,
-            close_pipe=False,
-            fps=config_data["fps"],
-            frame_range=list(frame_range),
-            depth_max=config_data["max_height"],
-            depth_min=config_data["min_height"],
-            progress_bar=config_data.get("progress_bar", False),
-        )
+            # Create array for output movie with filtered video and cropped mouse on the top left
+            output_movie = make_output_movie(results, mouse_proc_params.crop_size, offset)
 
-    # Check if video is done writing. If not, wait.
-    if video_pipe is not None:
-        video_pipe.communicate()
+            write_frames_preview(output_movie, preview_writer, frame_range=frame_range)
 
 
 def run_local_extract(to_extract, config_file, skip_extracted=False):
@@ -226,54 +241,49 @@ def run_slurm_extract(input_dir, to_extract, config_data, skip_extracted=False):
         "extract_out_script" in config_data
     ), "Need to supply extract_out_script to save extract commands"
     # expand input_dir absolute path
-    input_dir = abspath(input_dir)
+    input_dir = Path(input_dir).absolute()
 
     # make session_specific config file and save it in proc folder if session config exists
-    if exists(config_data.get("session_config_path", "")):
+    if Path(config_data.get("session_config_path", "")).exists():
         session_configs = read_yaml(config_data["session_config_path"])
-        for depth_file in to_extract:
-            output_dir = join(dirname(depth_file), config_data["output_dir"])
+        for depth_file in map(Path, to_extract):
+            output_file = depth_file.parent / config_data["output_dir"] / "config.yaml"
 
             # ensure output_dir exists
-            if not exists(output_dir):
-                makedirs(output_dir)
+            output_file.parent.mkdir(parents=True, exist_ok=True)
 
             # get and write session-specific parameters
-            output_file = join(output_dir, "config.yaml")
-            session_key = basename(dirname(depth_file))
+            session_key = depth_file.parent.name
 
-            with open(output_file, "w") as f:
-                yaml.safe_dump(session_configs.get(session_key, config_data), f)
+            write_yaml(output_file, session_configs.get(session_key, config_data))
 
     # Construct sbatch command for slurm
     commands = ""
-    for depth_file in to_extract:
-        output_dir = join(dirname(depth_file), config_data["output_dir"])
+    for depth_file in map(Path, to_extract):
+        output_dir = depth_file.parent / config_data["output_dir"]
 
         # skip session if skip_extracted is true and the session is already extracted
         if skip_extracted and check_completion_status(
-            join(output_dir, "results_00.yaml")
+            output_dir / "results_00.yaml"
         ):
             continue
 
         # set up config file
-        if exists(config_data.get("session_config_path", "")):
-            config_file = join(output_dir, "config.yaml")
+        if Path(config_data.get("session_config_path", "")).exists():
+            config_file = output_dir / "config.yaml"
         else:
-            config_file = config_data["config_file"]
+            config_file = Path(config_data["config_file"])
 
         # construct command
         base_command = (
-            f'moseq2-extract extract --config-file {config_file} {depth_file}; "\n'
+            f'moseq2-extract --config-file {config_file} extract {depth_file}; "\n'
         )
         prefix = f'sbatch -c {config_data["ncpus"] if config_data["ncpus"] > 0 else 1} --mem={config_data["memory"]} '
         prefix += f'-p {config_data["partition"]} -t {config_data["wall_time"]} --wrap "{config_data["prefix"]}'
         commands += prefix + base_command
 
     # Ensure output directory exists
-    config_data["extract_out_script"] = join(
-        input_dir, config_data["extract_out_script"]
-    )
+    config_data["extract_out_script"] = input_dir / config_data["extract_out_script"]
     with open(config_data["extract_out_script"], "w") as f:
         f.write(commands)
     print("Commands saved to:", config_data["extract_out_script"])
@@ -286,4 +296,4 @@ def run_slurm_extract(input_dir, to_extract, config_data, skip_extracted=False):
     # Run command using system
     if config_data["run_cmd"]:
         print("Running extract commands")
-        system(commands)
+        subprocess.run(commands, shell=True, check=True)
