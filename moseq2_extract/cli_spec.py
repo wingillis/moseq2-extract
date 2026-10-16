@@ -133,6 +133,14 @@ ROI_OPTIONS = [
         {"default": False, "help": "Overwrite previously computed background image"},
     ),
     (
+        ["--config-file"],
+        {
+            "type": click.Path(),
+            "default": None,
+            "help": "Path to configuration file",
+        },
+    ),
+    (
         ["--progress-bar", "-p"],
         {"is_flag": True, "help": "Show verbose progress bars."},
     ),

@@ -692,6 +692,79 @@ def write_yaml(yaml_file, data: dict):
         yaml.dump(data, f)
 
 
+def command_with_config(config_file_param_name):
+    """
+    Override default CLI variables with the values contained within the
+    config.yaml being passed.
+
+    Hierarchy of CLI parameters: params from cli options > params from
+    config_file > default params
+
+    Args:
+    config_file_param_name (str): path to config file.
+
+    Returns:
+    custom_command_class (function): decorator function to update click.Command
+    parameters with the config_file parameter values.
+    """
+
+    class custom_command_class(click.Command):
+
+        def invoke(self, ctx):
+            # grab the config file
+            config_file = ctx.params[config_file_param_name]
+            param_defaults = {
+                p.human_readable_name: p.default
+                for p in self.params
+                if isinstance(p, click.core.Option)
+            }
+            param_defaults = {
+                k: tuple(v) if type(v) is list else v
+                for k, v in param_defaults.items()
+            }
+            param_cli = {
+                k: tuple(v) if type(v) is list else v
+                for k, v in ctx.params.items()
+            }
+
+            if config_file is not None:
+
+                config_data = read_yaml(config_file)
+                # set config_data['output_file'] ['output_dir'] ['input_dir'] to
+                # None to avoid overwriting previous files
+                # assuming users would either input their own paths or use the
+                # default path
+                config_data["input_dir"] = None
+                config_data["output_dir"] = None
+                config_data["output_file"] = None
+
+                # modified to only use keys that are actually defined in options
+                # and the value is not none; sequences are converted to tuples to
+                # match tuple-typed CLI options
+                config_data = {
+                    k: tuple(v) if isinstance(v, list) else v
+                    for k, v in config_data.items()
+                    if k in param_defaults.keys() and v is not None
+                }
+
+                # find differences btw config and param defaults
+                diffs = set(param_defaults.items()) ^ set(param_cli.items())
+
+                # combine defaults w/ config data
+                combined = {**param_defaults, **config_data}
+
+                # update cli params that are non-default
+                keys = [d[0] for d in diffs]
+                for k in set(keys):
+                    combined[k] = ctx.params[k]
+
+                ctx.params = combined
+
+            return super().invoke(ctx)
+
+    return custom_command_class
+
+
 def mouse_threshold_filter(h5file, thresh=0):
     """
     Filter frames in h5 files by threshold value.

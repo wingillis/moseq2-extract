@@ -11,7 +11,12 @@ from moseq2_extract.cli_spec import (
     SLURM_OPTIONS,
     option_spec,
 )
-from moseq2_extract.util import recursive_find_unextracted_dirs, read_yaml
+from moseq2_extract.util import (
+    recursive_find_unextracted_dirs,
+    read_yaml,
+    write_yaml,
+    command_with_config,
+)
 from moseq2_extract.helpers.wrappers import (
     get_roi_wrapper,
     extract_wrapper,
@@ -33,51 +38,16 @@ common_extract_options = option_spec(EXTRACT_OPTIONS)
 slurm_options = option_spec(SLURM_OPTIONS)
 
 
-def load_config(ctx, param, value):
-    """Callback to load configuration from a yaml file and set defaults."""
-    if not value or not Path(value).exists():
-        return None  # No config file specified or found
-
-    try:
-        config = read_yaml(value)
-        # Extract the [extract] section if it exists
-        extract_config = config.get("extract", {})
-        if not isinstance(extract_config, dict):
-            raise click.BadParameter("Config [extract] section must be a dictionary.")
-
-        # Set the default map for the context if it doesn't exist
-        ctx.default_map = ctx.default_map or {}
-        # Update the default map with values from the config file
-        # add default map to each subcommand
-        _maps = {}
-        for command in ctx.command.commands.values():
-            _maps[command.name] = extract_config
-        ctx.default_map.update(_maps)
-
-        ctx.ensure_object(dict).update({"config_path": value})
-
-    except Exception as e:
-        raise click.BadParameter(f"Error parsing config file {value}: {e}")
-
-    return value  # Return the path itself
-
-
-@click.group(context_settings=dict(show_default=True, default_map={}))
+@click.group(context_settings=dict(show_default=True))
 @click.version_option()
-@click.option(
-    "--config-file",
-    type=click.Path(dir_okay=False),
-    help="Path to a yaml configuration file. Options defined here are overridden by CLI arguments.",
-    callback=load_config,
-    is_eager=True,
-)
-def cli(config_file):
+def cli():
     """MoSeq2 Extract: Extract mouse behavior from depth videos."""
     pass
 
 
 @cli.command(
     name="find-roi",
+    cls=command_with_config("config_file"),
     help="Finds the ROI (the arena) and background to subtract from frames when extracting.",
 )
 @click.argument("input-file", type=click.Path(exists=True))
@@ -88,6 +58,7 @@ def find_roi(input_file, output_dir, **kwargs):
 
 @cli.command(
     name="extract",
+    cls=command_with_config("config_file"),
     help="Processes raw input depth recordings to output a cropped and oriented "
     "video of the mouse and saves the output+metadata to h5 files in the given output directory.",
 )
@@ -103,6 +74,7 @@ def extract(input_file, output_dir, num_frames, skip_completed, **kwargs):
 
 @cli.command(
     name="batch-extract",
+    cls=command_with_config("config_file"),
     help="Batch processes all the raw depth recordings located in the input folder.",
 )
 @click.argument("input-folder", type=click.Path(exists=True, resolve_path=False))
@@ -139,15 +111,22 @@ def extract(input_file, output_dir, num_frames, skip_completed, **kwargs):
 @common_avi_options
 @common_extract_options
 @slurm_options
-@click.pass_context
 def batch_extract(
-    ctx,
     input_folder,
     **kwargs,
 ):
 
     output_dir = kwargs["output_dir"]
     skip_completed = kwargs["skip_completed"]
+
+    # check if there is a config file
+    config_file = kwargs.get("config_file")
+    if not config_file:
+        # Add message to tell the users to specify a config file
+        print(
+            "Command not run. Please specified a config file using --config-file flag."
+        )
+        return
 
     to_extract = []
     for ex in kwargs["extensions"]:
@@ -168,12 +147,19 @@ def batch_extract(
         )
         return
 
-    config_path = ctx.obj.get("config_path")
     if kwargs["cluster_type"] == "local":
-        run_local_extract(to_extract, config_path, skip_completed)
+        # the session specific config doesn't get generated in session proc file
+        # session specific config direct used in config_data dictionary in
+        # extraction from extract_command function
+        run_local_extract(to_extract, config_file, skip_completed)
     else:
-        # TODO: see if "session_config_path" is defined
-        kwargs["config_file"] = config_path
+        # add parameters to config
+        kwargs["session_config_path"] = (
+            read_yaml(config_file).get("session_config_path", "")
+            if config_file is not None
+            else ""
+        )
+        kwargs["config_file"] = str(Path(config_file).absolute())
         run_slurm_extract(input_folder, to_extract, kwargs, skip_completed)
 
 
@@ -181,17 +167,19 @@ def batch_extract(
     name="download-flip-file",
     help="Downloads Flip-correction model that helps with orienting the mouse during extraction.",
 )
+@click.argument(
+    "config-file",
+    type=click.Path(exists=True, resolve_path=False),
+    default="config.yaml",
+)
 @click.option(
     "--output-dir",
     type=click.Path(),
     default=Path.cwd(),
     help="Output directory for downloaded flip file",
 )
-@click.pass_context
-def download_flip_file(ctx, output_dir):
-    # TODO: test fix - get config file path
-    config_path = ctx.obj.get("config_path")
-    flip_file_wrapper(config_path, output_dir)
+def download_flip_file(config_file, output_dir):
+    flip_file_wrapper(config_file, output_dir)
 
 
 @cli.command(
@@ -202,41 +190,25 @@ def download_flip_file(ctx, output_dir):
 @click.option(
     "--camera-type",
     default="k2",
-    type=click.Choice(["k2", "azure", "auto"]),
+    type=str,
     help="specify the camera type (k2 or azure), default is k2",
 )
 def generate_config(output_file, camera_type):
-    """Copy default config and patch selected fields via sed to keep comments/structure."""
-    import shutil
-
-    script_path = Path(__file__).parent
-    default_path = script_path / "default-config.yaml"
-    shutil.copy(default_path, output_file)
-
+    params = {
+        tmp.name: tmp.default
+        for tmp in extract.params
+        if isinstance(tmp, click.core.Option) and not tmp.required
+    }
     if camera_type == "azure":
-        replacements = [
-            ("bg_roi_depth_range", "[550, 650]"),
-            ("spatial_filter_size", "[5]"),
-            ("tail_filter_size", "[15, 15]"),
-            ("crop_size", "[120, 120]"),
-            ("camera_type", '"azure"'),
-        ]
+        params["bg_roi_depth_range"] = [550, 650]
+        params["spatial_filter_size"] = [5]
+        params["tail_filter_size"] = [15, 15]
+        params["crop_size"] = [120, 120]
+        params["camera_type"] = "azure"
 
-        with open(output_file, "r") as f:
-            lines = f.readlines()
+    write_yaml(output_file, params)
 
-        new_lines = []
-        for line in lines:
-            for key, val in replacements:
-                if key in line:
-                    line = f"  {key}: {val}\n"
-                    break
-            new_lines.append(line)
-
-        with open(output_file, "w") as f:
-            f.writelines(new_lines)
-
-    print(f"Successfully generated config file at {output_file}.")
+    print(f"Successfully generated config file in base directory.")
 
 
 @cli.command(

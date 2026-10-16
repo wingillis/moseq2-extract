@@ -244,7 +244,11 @@ def run_slurm_extract(input_dir, to_extract, config_data, skip_extracted=False):
     input_dir = Path(input_dir).absolute()
 
     # make session_specific config file and save it in proc folder if session config exists
-    if Path(config_data.get("session_config_path", "")).exists():
+    # (an empty/unset path must not fall back to Path(".") == cwd, unlike
+    # release's os.path.exists("") which is False)
+    if config_data.get("session_config_path") and Path(
+        config_data["session_config_path"]
+    ).exists():
         session_configs = read_yaml(config_data["session_config_path"])
         for depth_file in map(Path, to_extract):
             output_file = depth_file.parent / config_data["output_dir"] / "config.yaml"
@@ -269,14 +273,16 @@ def run_slurm_extract(input_dir, to_extract, config_data, skip_extracted=False):
             continue
 
         # set up config file
-        if Path(config_data.get("session_config_path", "")).exists():
+        if config_data.get("session_config_path") and Path(
+            config_data["session_config_path"]
+        ).exists():
             config_file = output_dir / "config.yaml"
         else:
             config_file = Path(config_data["config_file"])
 
         # construct command
         base_command = (
-            f'moseq2-extract --config-file {config_file} extract {depth_file}; "\n'
+            f'moseq2-extract extract --config-file {config_file} {depth_file}; "\n'
         )
         prefix = f'sbatch -c {config_data["ncpus"] if config_data["ncpus"] > 0 else 1} --mem={config_data["memory"]} '
         prefix += f'-p {config_data["partition"]} -t {config_data["wall_time"]} --wrap "{config_data["prefix"]}'

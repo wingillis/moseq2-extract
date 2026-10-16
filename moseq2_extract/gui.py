@@ -331,7 +331,11 @@ def extract_command(input_file, output_dir, config_file, num_frames=None, skip=F
     config_data = read_yaml(config_file)
 
     # Loading individual session config parameters if it exists
-    if Path(config_data.get("session_config_path", "")).exists():
+    # Loading individual session config parameters if it exists
+    # (empty/unset path must not fall back to Path(".") == cwd)
+    if config_data.get("session_config_path") and Path(
+        config_data["session_config_path"]
+    ).exists():
         session_configs = read_yaml(config_data["session_config_path"])
         session_key = input_file.parent.name
 
