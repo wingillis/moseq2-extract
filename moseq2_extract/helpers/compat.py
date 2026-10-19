@@ -17,13 +17,24 @@ custom unpickler that maps legacy module names and transparently pads the
 node arrays of old trees (the padding value is 0, matching old trees that
 never routed missing values).  All of this only runs when a plain load
 fails; classifiers pickled with modern scikit-learn are unaffected.
+
+Classifiers trained with moseq2-app (removed from the upgraded stack) also
+load: their ``FunctionTransformer`` references
+``moseq2_app.flip.train.batch_apply_pca``, which is satisfied by a faithful
+pure-numpy stub so no moseq2_app installation is required.  Legacy
+estimator objects additionally get the attributes modern scikit-learn
+expects (PCA/FunctionTransformer fields, SVC property backing fields); the
+patches are inert for the numeric arrays and reproduce bit-identical
+predictions (verified against the original scikit-learn 0.20.3 stack).
 """
 
 import gzip
 import importlib
 import sys
+import types
 
 import joblib
+import numpy as np
 
 # legacy module path -> modern module path
 _LEGACY_SKLEARN_MODULES = {
@@ -59,6 +70,53 @@ def install_legacy_sklearn_aliases():
             sys.modules[legacy] = importlib.import_module(modern)
         except ImportError:
             pass
+
+
+def _moseq2_app_flatten(array):
+    return array.reshape(len(array), -1)
+
+
+def _moseq2_app_batch_apply_pca(frames, pca, batch_size=1000):
+    """Faithful mirror of ``moseq2_app.flip.train.batch_apply_pca``: apply
+    ``pca.transform`` to flattened frames in batches (a memory optimization
+    only -- numerically identical to a single ``pca.transform`` call).
+    Defined at module level so classifiers re-pickled through the stub stay
+    loadable."""
+    output = []
+    if len(frames) < batch_size:
+        return pca.transform(_moseq2_app_flatten(frames)).astype(np.float32)
+    for arr in np.array_split(frames, len(frames) // batch_size):
+        output.append(pca.transform(_moseq2_app_flatten(arr)).astype(np.float32))
+    return np.concatenate(output, axis=0).astype(np.float32)
+
+
+def _install_moseq2_app_stub():
+    """Provide a faithful ``batch_apply_pca`` for flip classifiers pickled by
+    moseq2-app (which the upgraded stack intentionally does not install).
+
+    moseq2-app's trainer wrapped its PCA in a ``FunctionTransformer`` whose
+    function reference unpickles as ``moseq2_app.flip.train.batch_apply_pca``.
+    The function is a pure-numpy batched ``pca.transform`` (a memory
+    optimization), so a faithful reimplementation is equivalent.  A real
+    moseq2_app installation, if present, is never shadowed.
+    """
+    if "moseq2_app.flip.train" in sys.modules:
+        return
+    try:
+        importlib.import_module("moseq2_app.flip.train")
+        return
+    except ImportError:
+        pass
+
+    pkg = types.ModuleType("moseq2_app")
+    sub = types.ModuleType("moseq2_app.flip")
+    mod = types.ModuleType("moseq2_app.flip.train")
+    mod.batch_apply_pca = _moseq2_app_batch_apply_pca
+    pkg.flip = sub
+    sub.train = mod
+    sys.modules["moseq2_app"] = pkg
+    sys.modules["moseq2_app.flip"] = sub
+    sys.modules["moseq2_app.flip.train"] = mod
 
 
 def _legacy_flip_unpickler():
@@ -122,8 +180,42 @@ def _load_patching_legacy_trees(path):
         return unpickler_cls(path, f, ensure_native_byte_order=False).load()
 
 
+def _patch_legacy_estimator_attrs(est):
+    """Set attributes modern scikit-learn expects that older pickles lack.
+
+    Covers the estimator families found in pre-trained flip classifiers:
+
+    - ``PCA`` pickled before 0.24 lacks ``power_iteration_normalizer`` /
+      ``iterated_power``, which modern ``__sklearn_tags__`` reads; transform()
+      only uses components_/mean_, so the patch values are inert.
+    - ``FunctionTransformer`` pickled before 1.2 lacks ``feature_names_out``
+      and before 1.4 lacks ``set_output``.
+    - ``SVC`` pickled before 0.22 stores ``n_support_`` / ``probA_`` / ``probB_``
+      (and ``dual_coef_`` / ``intercept_``); modern properties read
+      underscore-prefixed backing fields, and class-level properties shadow
+      the instance ``__dict__`` entries restored from the pickle.
+    """
+    name = type(est).__name__
+    if name == "PCA":
+        for k, v in ("power_iteration_normalizer", "LU"), ("iterated_power", "auto"):
+            if not hasattr(est, k):
+                setattr(est, k, v)
+    elif name == "FunctionTransformer":
+        for k, v in (("feature_names_out", None), ("set_output", None),
+                     ("validate", False), ("feature_names_in", None)):
+            if not hasattr(est, k):
+                setattr(est, k, v)
+    elif name in ("SVC", "NuSVC", "SVR", "NuSVR", "OneClassSVM"):
+        for pub, priv in (("n_support_", "_n_support"), ("probA_", "_probA"),
+                          ("probB_", "_probB"), ("dual_coef_", "_dual_coef_"),
+                          ("intercept_", "_intercept_")):
+            if priv not in est.__dict__ and pub in est.__dict__:
+                setattr(est, priv, est.__dict__[pub])
+
+
 def _patch_legacy_estimators(obj, seen=None):
-    """Add the modern `estimator` template to pre-1.2 forest pickles."""
+    """Add the modern `estimator` template to pre-1.2 forest pickles and patch
+    legacy estimator attributes (see `_patch_legacy_estimator_attrs`)."""
     import sklearn.tree
 
     if seen is None:
@@ -131,6 +223,7 @@ def _patch_legacy_estimators(obj, seen=None):
     if id(obj) in seen:
         return obj
     seen.add(id(obj))
+    _patch_legacy_estimator_attrs(obj)
     if hasattr(obj, "estimators_") and not hasattr(obj, "estimator"):
         obj.estimator = sklearn.tree.DecisionTreeClassifier()
     for attr in ("estimators_",):
@@ -138,13 +231,21 @@ def _patch_legacy_estimators(obj, seen=None):
             _patch_legacy_estimators(sub, seen)
     for step in getattr(obj, "steps", []) or []:
         _patch_legacy_estimators(step[1] if len(step) > 1 else step, seen)
+    for v in (getattr(obj, "kw_args", None) or {}).values():
+        _patch_legacy_estimators(v, seen)
     return obj
 
 
 def load_flip_classifier(path):
-    """Load a flip classifier pickle, tolerating legacy scikit-learn layouts."""
+    """Load a flip classifier pickle, tolerating legacy layouts.
+
+    Handles pre-0.22 scikit-learn module paths and node arrays (see module
+    docstring) as well as classifiers pickled by moseq2-app, whose
+    ``batch_apply_pca`` reference is satisfied with a faithful stub.
+    """
+    _install_moseq2_app_stub()
     try:
-        return joblib.load(path)
+        return _patch_legacy_estimators(joblib.load(path))
     except (ModuleNotFoundError, AttributeError):
         # Estimator classes moved to private modules; alias and retry.
         install_legacy_sklearn_aliases()

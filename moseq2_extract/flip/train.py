@@ -63,12 +63,12 @@ def train_classifier(
     pipeline = make_pipeline(
         ImageBlurTransformer(),
         MaskTransformer(mask=mask),
-        PCA(n_components=n_components),
+        PCA(n_components=n_components, random_state=0),
         StandardScaler(),
         (
-            RandomForestClassifier(n_estimators=150)
+            RandomForestClassifier(n_estimators=150, random_state=0)
             if classifier == "RF"
-            else SVC(kernel="rbf", C=2, probability=True)
+            else SVC(kernel="rbf", C=2, probability=True, random_state=0)
         ),
     )
 
