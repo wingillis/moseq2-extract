@@ -183,11 +183,26 @@ def open_video_writer(filename, fps, depth_min, depth_max, cmap="jet"):
     stream.pix_fmt = 'yuv420p'
     stream.options = {"preset": "medium", "crf": "25"}
 
+    # PyAV initializes a new video stream with default 640x480 dimensions;
+    # unless we set the size ourselves, stream.encode() silently rescales
+    # every frame to those defaults. The size is taken from the first frame
+    # so the preview matches the release-era output (ROI bbox + crop inset).
+    stream_size_set = False
+
     cmap = plt.get_cmap(cmap)
     font = cv2.FONT_HERSHEY_SIMPLEX
     white = (255, 255, 255)
 
     def write_frame(frame, frame_num):
+        nonlocal stream_size_set
+
+        # Pad odd dimensions to even values (yuv420p requires even sizes).
+        # The release-era ffmpeg-pipe writer applied the same padding.
+        if frame.shape[0] % 2:
+            frame = np.pad(frame, ((0, 1), (0, 0)))
+        if frame.shape[1] % 2:
+            frame = np.pad(frame, ((0, 0), (0, 1)))
+
         txt_pos = (5, frame.shape[-1] - 40)
 
         frame = frame.astype("float32")
@@ -199,6 +214,11 @@ def open_video_writer(filename, fps, depth_min, depth_max, cmap="jet"):
         except (IndexError, ValueError):
             # len(frame_range) M < len(frames) or txt_pos is outside of the frame dimensions
             print("Could not overlay frame number on preview on video.")
+
+        if not stream_size_set:
+            stream.width = frame.shape[1]
+            stream.height = frame.shape[0]
+            stream_size_set = True
 
         av_frame = av.VideoFrame.from_ndarray(frame, format='rgb24')
         for packet in stream.encode(av_frame):

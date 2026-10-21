@@ -1,4 +1,5 @@
 import os
+from pathlib import Path
 import numpy as np
 import numpy.testing as npt
 from unittest import TestCase
@@ -8,6 +9,7 @@ from moseq2_extract.io.video import (
     encode_depth_to_avi,
     encode_depth_to_avi_batch,
     get_movie_info,
+    get_avi_metadata,
     write_frames_preview,
     open_video_writer,
     avi_reader,
@@ -74,6 +76,24 @@ class TestVideoIO(TestCase):
         test_data = np.random.randint(0, 256, size=(30, 424, 512), dtype="int16")
         with open_video_writer(data_path, 30, 10, 120) as write_fun:
             write_frames_preview(test_data, write_fun, frame_range=range(len(test_data)))
+
+        vid_info = get_avi_metadata(Path(data_path))
+        # preview dimensions must match the frames (even sizes pass through)
+        npt.assert_equal(vid_info["dims"], (512, 424))
+        os.remove(data_path)
+
+    def test_write_frames_preview_odd_dims_padded(self):
+
+        data_path = "data/fake_preview_odd_depth.mp4"
+
+        # odd dimensions must be padded to even (yuv420p requirement),
+        # matching the release-era ffmpeg-pipe writer behavior
+        test_data = np.random.randint(0, 256, size=(5, 505, 521), dtype="int16")
+        with open_video_writer(data_path, 30, 10, 120) as write_fun:
+            write_frames_preview(test_data, write_fun, frame_range=range(len(test_data)))
+
+        vid_info = get_avi_metadata(Path(data_path))
+        npt.assert_equal(vid_info["dims"], (522, 506))
         os.remove(data_path)
 
     def test_get_movie_info(self):
