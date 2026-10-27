@@ -3,11 +3,11 @@ import sys
 import h5py
 import shutil
 from copy import deepcopy
-import ruamel.yaml as yaml
-from os.path import exists
+from pathlib import Path
 from unittest import TestCase
 from .test_cli import write_fake_movie
 from moseq2_extract.helpers.wrappers import copy_h5_metadata_to_yaml_wrapper
+from moseq2_extract.util import write_yaml, read_yaml
 from moseq2_extract.gui import (
     generate_config_command,
     generate_index_command,
@@ -24,7 +24,7 @@ class GUITests(TestCase):
 
     @classmethod
     def setUpClass(cls):
-        if exists("data/data/"):
+        if Path("data/data/").exists():
             shutil.rmtree("data/data/")
 
     def test_get_selected_sessions(self):
@@ -183,17 +183,17 @@ class GUITests(TestCase):
 
         assert os.path.isfile(flip_file), "flip file was not correctly downloaded"
 
-        with open(configfile, "r") as f:
-            config_data = yaml.safe_load(f)
+
+        config_data = read_yaml(configfile)
 
         config_data["compress"] = True
         config_data["camera_type"] = "auto"
         config_data["flip_classifier"] = flip_file
         config_data["use_plane_bground"] = True
         config_data["bg_roi_index"] = 0
+        config_data["bg_roi_sort_by_area"] = True
 
-        with open(configfile, "w") as f:
-            yaml.safe_dump(config_data, f)
+        write_yaml(configfile, config_data)
 
         stdin = "data/stdin.txt"
         with open(stdin, "w") as f:
@@ -211,8 +211,7 @@ class GUITests(TestCase):
         shutil.rmtree(data_path)
         os.remove(stdin)
 
-        with open(configfile, "r") as f:
-            config_data = yaml.safe_load(f)
+        config_data = read_yaml(configfile)
 
         config_data["camera_type"] = "auto"
         config_data["bg_roi_index"] = [0]
@@ -221,16 +220,11 @@ class GUITests(TestCase):
         config_data["bg_roi_depth_range"] = [500, 700]
         config_data["session_config_path"] = "data/session_config.yaml"
 
-        with open(configfile, "w") as f:
-            yaml.safe_dump(config_data, f)
+        write_yaml(configfile, config_data)
 
         session_config = {"azure_test": deepcopy(config_data)}
 
-        with open(config_data["session_config_path"], "w") as f:
-            yaml.safe_dump(session_config, f)
-
-        mkv_path = "data/azure_test/nfov_test.mkv"
-        ret = extract_command(mkv_path, None, configfile, skip=False, num_frames=60)
+        write_yaml(config_data["session_config_path"], session_config)
 
         out_dir = "data/azure_test/proc/"
         h5file = os.path.join(out_dir, "results_00.h5")

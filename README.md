@@ -39,3 +39,16 @@ Commands:
 # License
 
 MoSeq is freely available for academic use under a license provided by Harvard University. Please refer to the license file for details. If you are interested in using MoSeq for commercial purposes please contact Bob Datta directly at srdatta@hms.harvard.edu, who will put you in touch with the appropriate people in the Harvard Technology Transfer office.
+
+## Legacy Python 3.7 support
+
+This version requires Python >= 3.12. The final Python 3.7-compatible state
+of this repository is preserved on the `py37-legacy` branch (and the
+`py37-final` tag):
+
+```bash
+pip install "git+https://github.com/wingillis/moseq2-extract.git@py37-legacy"
+```
+
+The legacy branch is frozen (no new features); the modern branch is the
+supported going forward.

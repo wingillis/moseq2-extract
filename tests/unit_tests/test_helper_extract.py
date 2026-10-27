@@ -5,9 +5,10 @@ import uuid
 import shutil
 import numpy as np
 from copy import deepcopy
-import ruamel.yaml as yaml
+from ruamel.yaml import YAML
+yaml = YAML(typ='safe', pure=True)
 from unittest import TestCase
-from moseq2_extract.io.image import read_image
+from moseq2_extract.io.image import read_tiff
 from moseq2_extract.helpers.data import create_extract_h5
 from ..integration_tests.test_cli import write_fake_movie
 from moseq2_extract.gui import generate_config_command, download_flip_command
@@ -45,7 +46,7 @@ class TestHelperExtract(TestCase):
             )
 
             write_extracted_chunk_to_h5(
-                f, results, config_data, scalars, frame_range, offset
+                f, results, scalars, frame_range, offset
             )
 
         assert os.path.exists(out_file)
@@ -58,10 +59,10 @@ class TestHelperExtract(TestCase):
         metadata_path = "data/metadata.json"
         output_filename = "test_out"
 
-        bground_im = read_image(
+        bground_im = read_tiff(
             os.path.join(output_dir, "tiffs/", "bground_bucket.tiff"), scale=True
         )
-        roi = read_image(
+        roi = read_tiff(
             os.path.join(output_dir, "tiffs/", "roi_bucket_01.tiff"), scale=True
         )
         first_frame = np.zeros(roi.shape)
@@ -83,7 +84,6 @@ class TestHelperExtract(TestCase):
 
         config_data["flip_classifier"] = flip_file
         config_data["true_depth"] = true_depth
-        config_data["tar"] = False
 
         status_dict = {
             "parameters": deepcopy(config_data),
@@ -165,7 +165,7 @@ class TestHelperExtract(TestCase):
         assert os.path.isfile(data_path), "fake movie was not written correctly"
 
         with open(config_path, "r") as f:
-            params = yaml.safe_load(f)
+            params = yaml.load(f)
 
         prefix = ""
 
