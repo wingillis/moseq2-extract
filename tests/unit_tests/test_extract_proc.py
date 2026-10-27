@@ -18,6 +18,7 @@ from moseq2_extract.extract.proc import (
     feature_hampel_filter,
     _area_px_to_mm2,
 )
+from moseq2_extract.util import convert_pxs_to_mm
 from moseq2_extract.helpers.parameters import MouseProcessing
 
 
@@ -192,17 +193,81 @@ class TestExtractProc(TestCase):
             "axis_length": np.array([[4.0, 2.0]]),
         }
 
-        area_at_d = compute_scalars(
+        scalars_at_d = compute_scalars(
             frames, track_features, min_height=10, max_height=100,
             true_depth=500.0,
-        )["area_mm"][0]
-        area_at_2d = compute_scalars(
+        )
+        scalars_at_2d = compute_scalars(
             frames, track_features, min_height=10, max_height=100,
             true_depth=1000.0,
-        )["area_mm"][0]
+        )
 
+        # area_mm_calibrated uses the per-axis product, so it scales
+        # quadratically with depth (px^2 -> mm^2 conversion)
+        area_cal_at_d = scalars_at_d["area_mm_calibrated"][0]
+        area_cal_at_2d = scalars_at_2d["area_mm_calibrated"][0]
+        assert area_cal_at_d > 0
+        assert area_cal_at_2d / area_cal_at_d == pytest.approx(4.0, rel=1e-6)
+
+        # area_mm intentionally retains the legacy single mean-factor
+        # conversion, so it scales linearly with depth (px * mm units)
+        area_at_d = scalars_at_d["area_mm"][0]
+        area_at_2d = scalars_at_2d["area_mm"][0]
         assert area_at_d > 0
-        assert area_at_2d / area_at_d == pytest.approx(4.0, rel=1e-6)
+        assert area_at_2d / area_at_d == pytest.approx(2.0, rel=1e-6)
+
+    def test_compute_scalars_area_mm_formulas(self):
+        # Pin both formulas directly: area_mm is the legacy release
+        # expression (single mean mm/px factor), area_mm_calibrated is the
+        # dimensionally correct per-axis product.
+        frames = np.zeros((1, 424, 512), dtype="float32")
+        frames[0, 88:90, 136:138] = 20.0
+
+        track_features = {
+            "centroid": np.array([[137.0, 89.0]]),
+            "orientation": np.array([0.0]),
+            "axis_length": np.array([[4.0, 2.0]]),
+        }
+
+        scalars = compute_scalars(
+            frames, track_features, min_height=10, max_height=100,
+            true_depth=500.0,
+        )
+
+        # recover px_to_mm the same way compute_scalars derives it
+        centroid_mm = convert_pxs_to_mm(
+            track_features["centroid"], true_depth=500.0)
+        centroid_mm_shift = convert_pxs_to_mm(
+            track_features["centroid"] + 1, true_depth=500.0)
+        px_to_mm = np.abs(centroid_mm_shift - centroid_mm)
+
+        expected_legacy = scalars["area_px"] * px_to_mm.mean(axis=1)
+        expected_calibrated = scalars["area_px"] * px_to_mm[:, 0] * px_to_mm[:, 1]
+
+        npt.assert_allclose(scalars["area_mm"], expected_legacy, rtol=1e-12)
+        npt.assert_allclose(
+            scalars["area_mm_calibrated"], expected_calibrated, rtol=1e-12)
+
+        # the two differ unless the per-axis factors are equal
+        assert not np.allclose(
+            scalars["area_mm"], scalars["area_mm_calibrated"], rtol=1e-6)
+
+    def test_area_mm_keys_in_scalar_attributes(self):
+        # Both scalars must be declared so the h5 writer emits them
+        from moseq2_extract.util import SCALAR_ATTRIBUTES
+        assert "area_mm" in SCALAR_ATTRIBUTES
+        assert "area_mm_calibrated" in SCALAR_ATTRIBUTES
+
+        computed = compute_scalars(
+            np.zeros((2, 424, 512), dtype="float32"),
+            {
+                "centroid": np.array([[137.0, 89.0], [137.0, 89.0]]),
+                "orientation": np.array([0.0, 0.0]),
+                "axis_length": np.array([[4.0, 2.0], [4.0, 2.0]]),
+            },
+            min_height=10, max_height=100, true_depth=500.0,
+        )
+        assert set(SCALAR_ATTRIBUTES) == set(computed)
 
     def test_area_px_to_mm2_scales_with_each_axis_independently(self):
         # The depth test above cannot distinguish the product of both axis

@@ -517,6 +517,10 @@ def _area_px_to_mm2(area_px, px_to_mm):
     pixel count converts to an area by the product of both factors, not by a
     single linear factor. Using one linear factor leaves the result in px * mm.
 
+    This backs the ``area_mm_calibrated`` scalar. The ``area_mm`` scalar
+    intentionally retains the legacy single mean-factor conversion for
+    compatibility with downstream consumers trained on it.
+
     Args:
     area_px (np.ndarray): nframes, mask area measured in pixels
     px_to_mm (np.ndarray): nframes x 2, per-axis conversion factors in mm/px
@@ -561,6 +565,7 @@ def compute_scalars(frames, track_features, min_height=10, max_height=100, true_
         'width_mm': np.zeros((nframes,), 'float32'),
         'length_mm': np.zeros((nframes,), 'float32'),
         'area_mm': np.zeros((nframes,)),
+        'area_mm_calibrated': np.zeros((nframes,)),
         'height_ave_mm': np.zeros((nframes,), 'float32'),
         'angle': np.zeros((nframes,), 'float32'),
         'velocity_theta': np.zeros((nframes,)),
@@ -588,7 +593,11 @@ def compute_scalars(frames, track_features, min_height=10, max_height=100, true_
 
     features['width_mm'] = features['width_px'] * px_to_mm[:, 1]
     features['length_mm'] = features['length_px'] * px_to_mm[:, 0]
-    features['area_mm'] = _area_px_to_mm2(features['area_px'], px_to_mm)
+    # area_mm keeps the legacy mean-factor formula (release parity for
+    # downstream consumers); area_mm_calibrated applies the dimensionally
+    # correct per-axis px^2 -> mm^2 conversion (upstream fix)
+    features['area_mm'] = features['area_px'] * px_to_mm.mean(axis=1)
+    features['area_mm_calibrated'] = _area_px_to_mm2(features['area_px'], px_to_mm)
 
     features['angle'] = track_features['orientation']
 

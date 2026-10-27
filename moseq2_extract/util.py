@@ -32,7 +32,8 @@ SCALAR_ATTRIBUTES = {
     'velocity_3d_mm': '3D velocity (mm / frame), note that missing frames are not accounted for',
     'width_mm': 'Mouse width (mm)',
     'length_mm': 'Mouse length (mm)',
-    'area_mm': 'Mouse area (mm^2)',
+    'area_mm': 'Mouse area (mm)',
+    'area_mm_calibrated': 'Mouse area (mm^2), per-axis px-to-mm calibrated conversion (area_px * fx * fy); area_mm retains the legacy mean-factor conversion',
     'height_ave_mm': 'Mouse average height (mm)',
     'angle': 'Angle (radians, unwrapped)',
     'velocity_theta': 'Angular component of velocity (arctan(vel_x, vel_y))'
